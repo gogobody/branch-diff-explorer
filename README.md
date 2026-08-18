@@ -13,6 +13,8 @@ features.
 - Filter by file change kind, Git state, extension, and glob patterns.
 - Open normal changes, author-filtered changes, and single commits in VS Code's
   native side-by-side diff editor.
+- File rows open the complete base-branch-to-working-tree diff; when a single
+  commit is selected, they open that commit's parent-to-commit diff instead.
 - Go to Definition, Declaration, Type Definition, and Implementation from a
   virtual Git diff pane; the destination opens in the active workspace source.
 - Inspect one commit at a time.

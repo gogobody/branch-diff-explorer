@@ -420,27 +420,19 @@ class ExplorerController implements vscode.Disposable {
     const file = snapshot.files.find((candidate) => candidate.path === path && candidate.source === source);
     if (!file) return;
     const repository = new GitRepository(snapshot.repository.path, this.gitRunOptions(vscode.Uri.file(snapshot.repository.path)));
-    const revision = (source === 'author' || source === 'commit') ? file.commitHash ?? snapshot.activeCommit : undefined;
-    const leftRef = revision
-      ? `${revision}^`
-      : source === 'committed' || source === 'author' || source === 'commit'
-        ? snapshot.repository.baseBranch
-        : source === 'staged'
-          ? 'HEAD'
-          : ':';
-    const rightRef = revision
-      ? revision
-      : source === 'committed' || source === 'author' || source === 'commit'
-        ? 'HEAD'
-        : ':';
+    const revision = source === 'commit' ? file.commitHash ?? snapshot.activeCommit : undefined;
+    const leftRef = revision ? `${revision}^` : snapshot.repository.baseBranch;
+    const rightRef = revision ?? 'HEAD';
     const leftPath = file.previousPath ?? file.path;
     const leftTarget = vscode.Uri.file(resolve(snapshot.repository.path, leftPath));
     const rightTarget = vscode.Uri.file(resolve(snapshot.repository.path, file.path));
     const left = this.content.put(await this.contentForRef(repository, leftRef, leftPath), leftTarget);
-    const right = source === 'unstaged'
-      ? rightTarget
-      : this.content.put(await this.contentForRef(repository, rightRef, file.path), rightTarget);
-    const title = revision ? `${file.path} (${revision.slice(0, 8)})` : `${file.path} (${source})`;
+    const right = revision
+      ? this.content.put(await this.contentForRef(repository, rightRef, file.path), rightTarget)
+      : await this.currentFileOrEmpty(rightTarget);
+    const title = revision
+      ? `${file.path} (${revision.slice(0, 8)})`
+      : `${file.path} (${snapshot.repository.baseBranch}…working tree)`;
     await vscode.commands.executeCommand('vscode.diff', left, right, title, { preview: true });
   }
 
@@ -510,6 +502,16 @@ class ExplorerController implements vscode.Disposable {
     } catch {
       // New/deleted files have no content on one side of a diff.
       return '';
+    }
+  }
+
+  private async currentFileOrEmpty(target: vscode.Uri): Promise<vscode.Uri> {
+    try {
+      await vscode.workspace.fs.stat(target);
+      return target;
+    } catch {
+      // Deleted files need an empty right side instead of their HEAD contents.
+      return this.content.put('', target);
     }
   }
 
