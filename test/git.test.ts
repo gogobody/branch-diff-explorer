@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { authorId, coalesceChangedFiles, DEFAULT_GIT_MAX_OUTPUT_BYTES, GitRepository, parsePatch, runGit } from '../src/git';
+import { applyOverallPatch, authorId, coalesceChangedFiles, DEFAULT_GIT_MAX_OUTPUT_BYTES, GitRepository, parsePatch, runGit } from '../src/git';
 
 const temporaryDirectories: string[] = [];
 
@@ -97,6 +97,35 @@ index abcdef0..fedcba0 100644
   });
 });
 
+describe('applyOverallPatch', () => {
+  it('uses final file line totals instead of adding intermediate changes', () => {
+    const scope = parsePatch(`diff --git a/src/example.ts b/src/example.ts
+index 1234567..abcdef0 100644
+--- a/src/example.ts
++++ b/src/example.ts
+@@ -1 +1 @@
+-old
++first
+`, 'author');
+    const overall = parsePatch(`diff --git a/src/example.ts b/src/example.ts
+index 1234567..fedcba0 100644
+--- a/src/example.ts
++++ b/src/example.ts
+@@ -1 +1 @@
+-old
++final
+`, 'committed');
+
+    expect(applyOverallPatch(scope, overall)).toMatchObject([{
+      path: 'src/example.ts',
+      source: 'author',
+      additions: 1,
+      deletions: 1,
+      lines: [{ kind: 'deletion', line: 1, text: 'old' }, { kind: 'addition', line: 1, text: 'final' }],
+    }]);
+  });
+});
+
 describe('GitRepository author filtering', () => {
   it('returns an empty, usable snapshot for a repository without commits', async () => {
     const repositoryPath = await mkdtemp(join(tmpdir(), 'branch-diff-explorer-empty-'));
@@ -141,13 +170,14 @@ describe('GitRepository author filtering', () => {
     const allChanges = await repository.snapshot({ baseBranch: 'main' });
     expect(allChanges.files.map((file) => file.path)).toEqual(expect.arrayContaining(['src/alice.ts', 'src/bob.ts']));
     expect(allChanges.totals).toMatchObject({ files: 2, additions: 2, deletions: 0 });
+    expect(allChanges.files.find((file) => file.path === 'src/bob.ts')).toMatchObject({ additions: 1, deletions: 0 });
 
     const bobChanges = await repository.snapshot({
       baseBranch: 'main',
       authorIds: [authorId('Bob', 'bob@example.test')],
     });
     expect(bobChanges.files).toHaveLength(1);
-    expect(bobChanges.files[0]).toMatchObject({ path: 'src/bob.ts', source: 'author', sources: ['author'], commitHash: bobUpdateHash, additions: 2, deletions: 1 });
+    expect(bobChanges.files[0]).toMatchObject({ path: 'src/bob.ts', source: 'author', sources: ['author'], commitHash: bobUpdateHash, additions: 1, deletions: 0 });
     expect(bobChanges.notice).toContain('Uncommitted work is excluded');
 
     const keywordChanges = await repository.snapshot({ baseBranch: 'main', authorKeyword: 'bob@example' });

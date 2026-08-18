@@ -8,7 +8,7 @@ features.
 
 - Search additions and deletions across committed, staged, and unstaged changes.
 - Shows each changed path once in the directory tree, even when it was changed in
-  several commits or Git states; its line totals are combined.
+  several commits or Git states; its line totals reflect only the final diff.
 - Compare your branch with any local or remote base branch.
 - Filter by file change kind, Git state, extension, and glob patterns.
 - Open normal changes, author-filtered changes, and single commits in VS Code's

@@ -173,6 +173,27 @@ export function coalesceChangedFiles(files: ChangedFile[]): ChangedFile[] {
   return [...byPath.values()];
 }
 
+/**
+ * Keep the selected scope (for example, one author) but use the final patch
+ * from the branch base to the working tree for line counts and diff content.
+ */
+export function applyOverallPatch(scopeFiles: ChangedFile[], overallFiles: ChangedFile[]): ChangedFile[] {
+  const scoped = new Map(scopeFiles.map((file) => [file.path, file]));
+  return overallFiles.flatMap((overall) => {
+    const scope = scoped.get(overall.path);
+    if (!scope) return [];
+    return [{
+      ...scope,
+      previousPath: overall.previousPath ?? scope.previousPath,
+      status: overall.status,
+      additions: overall.additions,
+      deletions: overall.deletions,
+      lines: overall.lines,
+      patch: overall.patch,
+    }];
+  });
+}
+
 function sourcePriority(source: ChangeSource): number {
   return ({ author: 0, commit: 0, committed: 1, staged: 2, unstaged: 3 })[source];
 }
@@ -310,6 +331,10 @@ export class GitRepository {
     }
 
     files = coalesceChangedFiles(files);
+    if (hasHead && !activeCommit) {
+      const overallFiles = parsePatch(await this.workingTreePatch(baseBranch), 'committed');
+      files = applyOverallPatch(files, overallFiles);
+    }
 
     const totals = {
       files: new Set(files.map((file) => file.path)).size,
@@ -368,6 +393,11 @@ export class GitRepository {
 
   private diffPatch(revisionArgs: string[]): Promise<string> {
     return this.run(['diff', '--no-color', '--no-ext-diff', '--find-renames=40%', '--patch', ...revisionArgs, '--']);
+  }
+
+  private async workingTreePatch(baseBranch: string): Promise<string> {
+    const mergeBase = (await this.run(['merge-base', baseBranch, 'HEAD'])).trim();
+    return this.diffPatch([mergeBase]);
   }
 
   private commitPatch(hash: string): Promise<string> {
