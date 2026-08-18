@@ -431,9 +431,12 @@ class ExplorerController implements vscode.Disposable {
     const rightTarget = vscode.Uri.file(resolve(snapshot.repository.path, file.path));
     if (source === 'author') {
       const rightContent = await this.currentContentOrEmpty(rightTarget);
-      const left = this.content.put(revertPatchFromContent(rightContent, file.patch), leftTarget);
+      const hasBaseVersion = await repository.hasContentAt(snapshot.repository.baseBranch, leftPath);
+      const leftContent = hasBaseVersion ? revertPatchFromContent(rightContent, file.patch) : '';
+      const left = this.content.put(leftContent, leftTarget);
       const right = this.content.put(rightContent, rightTarget);
-      await vscode.commands.executeCommand('vscode.diff', left, right, `${file.path} (author changes)`, { preview: true });
+      const title = hasBaseVersion ? `${file.path} (author changes)` : `${file.path} (new file)`;
+      await vscode.commands.executeCommand('vscode.diff', left, right, title, { preview: true });
       return;
     }
     const revision = source === 'commit' ? file.commitHash ?? snapshot.activeCommit : undefined;

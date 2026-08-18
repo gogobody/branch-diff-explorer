@@ -364,6 +364,15 @@ export class GitRepository {
     return this.run(['show', `${ref}:${path}`]);
   }
 
+  async hasContentAt(ref: string, path: string): Promise<boolean> {
+    try {
+      await this.run(['cat-file', '-e', `${ref}:${path}`]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async branches(): Promise<string[]> {
     const output = await this.run(['for-each-ref', '--format=%(refname:short)', 'refs/heads', 'refs/remotes']);
     return [...new Set(output.split('\n').map((branch) => branch.trim()).filter((branch) => branch && !branch.endsWith('/HEAD')))];
@@ -450,7 +459,7 @@ export class GitRepository {
     files = coalesceChangedFiles(files);
     if (hasHead && !activeCommit) {
       if (activeAuthorIds.length || activeAuthorKeyword) {
-        files = await this.applyAuthorTotals(files);
+        files = await this.applyAuthorTotals(files, baseBranch);
       } else {
         const overallFiles = parsePatch(await this.workingTreePatch(baseBranch), 'committed');
         files = applyOverallPatch(files, overallFiles);
@@ -521,10 +530,11 @@ export class GitRepository {
     return this.diffPatch([mergeBase]);
   }
 
-  private async applyAuthorTotals(files: ChangedFile[]): Promise<ChangedFile[]> {
+  private async applyAuthorTotals(files: ChangedFile[], baseBranch: string): Promise<ChangedFile[]> {
     const netFiles = await Promise.all(files.map(async (file) => {
       const right = await this.workingTreeContent(file.path);
-      const left = revertPatchFromContent(right, file.patch);
+      const hasBaseVersion = await this.hasContentAt(baseBranch, file.previousPath ?? file.path);
+      const left = hasBaseVersion ? revertPatchFromContent(right, file.patch) : '';
       return { ...file, ...lineChangeTotals(left, right) };
     }));
     return netFiles.filter((file) => file.additions || file.deletions);

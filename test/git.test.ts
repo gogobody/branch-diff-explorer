@@ -220,7 +220,7 @@ describe('GitRepository author filtering', () => {
       authorIds: [authorId('Bob', 'bob@example.test')],
     });
     expect(bobChanges.files).toHaveLength(1);
-    expect(bobChanges.files[0]).toMatchObject({ path: 'src/bob.ts', source: 'author', sources: ['author'], commitHash: bobUpdateHash, additions: 1, deletions: 0 });
+    expect(bobChanges.files[0]).toMatchObject({ path: 'src/bob.ts', source: 'author', sources: ['author'], commitHash: bobUpdateHash, additions: 2, deletions: 0 });
     expect(bobChanges.files[0].patch).not.toContain('aliceFollowUp');
     expect(bobChanges.notice).toContain('Uncommitted work is excluded');
 

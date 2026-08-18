@@ -21,6 +21,8 @@ features.
   highlighted changes while keeping the rest of the current file visible.
 - Author-filtered line totals are calculated from that final highlighted diff,
   rather than by adding up edits from every matching commit.
+- If a file does not exist on the selected base branch, it is shown as a full
+  addition in author-filtered diffs.
 - Go to Definition, Declaration, Type Definition, and Implementation from a
   virtual Git diff pane; the destination opens in the active workspace source.
 - Inspect one commit at a time.
