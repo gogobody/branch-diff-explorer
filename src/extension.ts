@@ -1,0 +1,538 @@
+import * as vscode from 'vscode';
+import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
+import { GitRepository, runGit } from './git';
+import { createWebviewHtml } from './webview';
+import type { ChangedFile, DiffSnapshot, FindingSeverity, SnapshotRequest } from './types';
+
+const CONTENT_SCHEME = 'branch-diff-explorer-content';
+const SESSIONS_STORAGE_KEY = 'branchDiffExplorer.sessions.v1';
+
+interface RepositoryChoice {
+  path: string;
+  name: string;
+}
+
+interface SessionUiConfig {
+  query?: string;
+  scope?: string;
+  status?: string;
+  extension?: string;
+  glob?: string;
+  excludeDirectories?: string;
+  caseSensitive?: boolean;
+  regex?: boolean;
+  wholeWord?: boolean;
+}
+
+interface ExplorerSession {
+  id: string;
+  name: string;
+  config: SnapshotRequest & { repositoryPath?: string; ui?: SessionUiConfig };
+}
+
+interface ViewRequest extends SnapshotRequest {
+  repositoryPath?: string;
+  sessionId?: string;
+}
+
+interface ExplorerViewState {
+  snapshot: DiffSnapshot;
+  session: ExplorerSession;
+  sessions: ExplorerSession[];
+}
+
+interface ViewMessage {
+  type: 'ready' | 'refresh' | 'switchSession' | 'createSession' | 'renameSession' | 'deleteSession' | 'saveSession' | 'openFile' | 'openPanel' | 'openPath' | 'copyPath' | 'revealPath' | 'toggleFavorite' | 'toggleReviewed' | 'triage' | 'info';
+  request?: ViewRequest;
+  sessionId?: string;
+  ui?: SessionUiConfig;
+  path?: string;
+  source?: ChangedFile['source'];
+  line?: number;
+  findingId?: string;
+  decision?: 'agreed' | 'skipped';
+  copyKind?: 'absolute' | 'relative' | 'name' | 'uri';
+}
+
+class VirtualGitContent implements vscode.TextDocumentContentProvider {
+  private readonly contents = new Map<string, string>();
+
+  put(value: string): vscode.Uri {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    this.contents.set(id, value);
+    return vscode.Uri.parse(`${CONTENT_SCHEME}:/${id}.txt`);
+  }
+
+  provideTextDocumentContent(uri: vscode.Uri): string {
+    return this.contents.get(uri.path.slice(1).replace(/\.txt$/, '')) ?? '';
+  }
+}
+
+class ExplorerWebview implements vscode.Disposable {
+  private snapshot?: DiffSnapshot;
+  private request: ViewRequest = {};
+  private readonly disposables: vscode.Disposable[] = [];
+
+  constructor(
+    private readonly controller: ExplorerController,
+    private readonly webview: vscode.Webview,
+  ) {
+    webview.options = { enableScripts: true, localResourceRoots: [] };
+    webview.html = createWebviewHtml(webview);
+    this.disposables.push(webview.onDidReceiveMessage((message: ViewMessage) => this.receive(message)));
+  }
+
+  async refresh(request?: ViewRequest): Promise<void> {
+    if (request) this.request = request;
+    try {
+      const state = await this.controller.snapshot(this.request);
+      this.snapshot = state.snapshot;
+      this.request = { ...state.session.config, sessionId: state.session.id };
+      await this.webview.postMessage({
+        type: 'state',
+        snapshot: state.snapshot,
+        repositories: await this.controller.repositories(),
+        session: state.session,
+        sessions: state.sessions,
+      });
+    } catch (error) {
+      await this.webview.postMessage({ type: 'error', message: errorMessage(error) });
+    }
+  }
+
+  dispose(): void {
+    for (const disposable of this.disposables) disposable.dispose();
+  }
+
+  private async receive(message: ViewMessage): Promise<void> {
+    switch (message.type) {
+      case 'ready':
+      case 'refresh':
+        await this.refresh(message.request);
+        return;
+      case 'switchSession':
+        if (message.sessionId) await this.refresh({ sessionId: message.sessionId });
+        return;
+      case 'createSession': {
+        const session = await this.controller.createSession(this.request.sessionId);
+        if (session) await this.refresh({ sessionId: session.id });
+        return;
+      }
+      case 'renameSession':
+        if (this.request.sessionId) await this.controller.renameSession(this.request.sessionId);
+        await this.refresh();
+        return;
+      case 'deleteSession': {
+        const fallback = this.request.sessionId ? await this.controller.deleteSession(this.request.sessionId) : undefined;
+        if (fallback) await this.refresh({ sessionId: fallback.id });
+        return;
+      }
+      case 'saveSession':
+        if (message.sessionId && message.ui) await this.controller.saveSessionUi(message.sessionId, message.ui);
+        return;
+      case 'openFile':
+        if (!this.snapshot || !message.path || !message.source) return;
+        await this.controller.openFile(this.snapshot, message.path, message.source);
+        return;
+      case 'openPanel':
+        await this.controller.openPanel(this.request);
+        return;
+      case 'openPath':
+        if (message.path) await this.controller.openPath(this.snapshot?.repository.path, message.path, message.line);
+        return;
+      case 'copyPath':
+        if (message.path && message.copyKind) await this.controller.copyPath(this.snapshot?.repository.path, message.path, message.copyKind);
+        return;
+      case 'revealPath':
+        if (message.path) await this.controller.revealPath(this.snapshot?.repository.path, message.path);
+        return;
+      case 'toggleFavorite':
+        if (this.snapshot && message.path) {
+          await this.controller.toggleFavorite(this.snapshot, message.path);
+          await this.refresh();
+        }
+        return;
+      case 'toggleReviewed':
+        if (this.snapshot && message.path) {
+          await this.controller.toggleReviewed(this.snapshot, message.path);
+          await this.refresh();
+        }
+        return;
+      case 'triage':
+        if (this.snapshot && message.findingId && message.decision) {
+          await this.controller.triage(this.snapshot, message.findingId, message.decision);
+          await this.refresh();
+        }
+        return;
+      case 'info':
+        void vscode.window.showInformationMessage('Branch Diff Explorer uses only local Git data.');
+        return;
+    }
+  }
+}
+
+class SidebarProvider implements vscode.WebviewViewProvider {
+  private view?: vscode.WebviewView;
+  private client?: ExplorerWebview;
+
+  constructor(private readonly controller: ExplorerController) {}
+
+  resolveWebviewView(view: vscode.WebviewView): void {
+    this.view = view;
+    this.client?.dispose();
+    this.client = new ExplorerWebview(this.controller, view.webview);
+    void this.client.refresh();
+    view.onDidDispose(() => {
+      this.client?.dispose();
+      this.client = undefined;
+      this.view = undefined;
+    });
+  }
+
+  async show(): Promise<void> {
+    await vscode.commands.executeCommand('workbench.view.extension.branchDiffExplorer');
+    this.view?.show?.(true);
+    await this.client?.refresh();
+  }
+
+  refresh(): void {
+    void this.client?.refresh();
+  }
+}
+
+class ExplorerController implements vscode.Disposable {
+  private readonly content = new VirtualGitContent();
+  private readonly disposables: vscode.Disposable[] = [];
+  private readonly clients = new Set<ExplorerWebview>();
+  private readonly sidebar: SidebarProvider;
+  private readonly decorations: Record<FindingSeverity, vscode.TextEditorDecorationType>;
+  private lastSnapshot?: DiffSnapshot;
+  private refreshTimer?: NodeJS.Timeout;
+
+  constructor(private readonly context: vscode.ExtensionContext) {
+    this.sidebar = new SidebarProvider(this);
+    const gitWatcher = vscode.workspace.createFileSystemWatcher('**/.git/**');
+    const reviewerWatcher = vscode.workspace.createFileSystemWatcher('**/.diffly/findings.json');
+    this.decorations = {
+      critical: vscode.window.createTextEditorDecorationType({ backgroundColor: 'rgba(241, 76, 76, 0.24)', overviewRulerColor: '#f14c4c', overviewRulerLane: vscode.OverviewRulerLane.Right }),
+      high: vscode.window.createTextEditorDecorationType({ backgroundColor: 'rgba(255, 136, 0, 0.20)', overviewRulerColor: '#ff8800', overviewRulerLane: vscode.OverviewRulerLane.Right }),
+      medium: vscode.window.createTextEditorDecorationType({ backgroundColor: 'rgba(228, 198, 82, 0.18)', overviewRulerColor: '#e4c652', overviewRulerLane: vscode.OverviewRulerLane.Right }),
+      low: vscode.window.createTextEditorDecorationType({ backgroundColor: 'rgba(55, 148, 255, 0.16)', overviewRulerColor: '#3794ff', overviewRulerLane: vscode.OverviewRulerLane.Right }),
+      nit: vscode.window.createTextEditorDecorationType({ backgroundColor: 'rgba(128, 128, 128, 0.14)', overviewRulerColor: '#858585', overviewRulerLane: vscode.OverviewRulerLane.Right }),
+    };
+    this.disposables.push(
+      vscode.workspace.registerTextDocumentContentProvider(CONTENT_SCHEME, this.content),
+      vscode.window.registerWebviewViewProvider('branchDiffExplorer.view', this.sidebar),
+      vscode.commands.registerCommand('branchDiffExplorer.open', () => this.sidebar.show()),
+      vscode.commands.registerCommand('branchDiffExplorer.openPanel', () => this.openPanel()),
+      vscode.commands.registerCommand('branchDiffExplorer.refresh', () => this.refreshAll()),
+      vscode.workspace.onDidSaveTextDocument(() => this.scheduleRefresh()),
+      vscode.workspace.onDidChangeWorkspaceFolders(() => this.scheduleRefresh()),
+      gitWatcher,
+      gitWatcher.onDidCreate(() => this.scheduleRefresh()),
+      gitWatcher.onDidChange(() => this.scheduleRefresh()),
+      gitWatcher.onDidDelete(() => this.scheduleRefresh()),
+      reviewerWatcher,
+      reviewerWatcher.onDidCreate(() => this.scheduleRefresh()),
+      reviewerWatcher.onDidChange(() => this.scheduleRefresh()),
+      reviewerWatcher.onDidDelete(() => this.scheduleRefresh()),
+      vscode.window.onDidChangeActiveTextEditor(() => this.decorateFindings(this.lastSnapshot)),
+      ...Object.values(this.decorations),
+    );
+    context.subscriptions.push(this);
+  }
+
+  dispose(): void {
+    if (this.refreshTimer) clearTimeout(this.refreshTimer);
+    for (const disposable of this.disposables) disposable.dispose();
+    for (const client of this.clients) client.dispose();
+  }
+
+  async repositories(): Promise<RepositoryChoice[]> {
+    const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+    const roots = new Set<string>();
+    for (const folder of workspaceFolders) {
+      if (await GitRepository.isRepository(folder.uri.fsPath)) {
+        roots.add((await runGit(folder.uri.fsPath, ['rev-parse', '--show-toplevel'])).trim());
+      }
+    }
+    return [...roots].sort().map((path) => ({ path, name: vscode.workspace.asRelativePath(path, false) || path.split(/[\\/]/).pop() || path }));
+  }
+
+  async snapshot(request: ViewRequest): Promise<ExplorerViewState> {
+    const sessions = this.sessions();
+    const session = sessions.find((candidate) => candidate.id === request.sessionId) ?? sessions[0];
+    const configured = session.config;
+    const effectiveRequest: ViewRequest = {
+      repositoryPath: request.repositoryPath ?? configured.repositoryPath,
+      baseBranch: request.baseBranch ?? configured.baseBranch,
+      authorIds: request.authorIds ?? configured.authorIds,
+      authorKeyword: request.authorKeyword ?? configured.authorKeyword,
+      commitHash: request.commitHash ?? configured.commitHash,
+    };
+    const repositories = await this.repositories();
+    if (!repositories.length) {
+      await vscode.commands.executeCommand('setContext', 'branchDiffExplorer.hasRepository', false);
+      throw new Error('Open a folder that contains a Git repository to inspect a branch diff.');
+    }
+    await vscode.commands.executeCommand('setContext', 'branchDiffExplorer.hasRepository', true);
+    const selected = repositories.find((repo) => repo.path === effectiveRequest.repositoryPath) ?? repositories[0];
+    const configuration = vscode.workspace.getConfiguration('branchDiffExplorer', vscode.Uri.file(selected.path));
+    const maxLines = configuration.get<number>('maxChangedLines', 4000);
+    const storedBase = this.context.workspaceState.get<string>(`branchDiffExplorer.base:${selected.path}`);
+    const gitRequest = { ...effectiveRequest, baseBranch: effectiveRequest.baseBranch || storedBase };
+    const result = await new GitRepository(selected.path).snapshot(gitRequest, configuration.get<string>('defaultBaseBranch'), maxLines);
+    if (effectiveRequest.baseBranch && effectiveRequest.baseBranch === result.repository.baseBranch) {
+      await this.context.workspaceState.update(`branchDiffExplorer.base:${selected.path}`, effectiveRequest.baseBranch);
+    }
+    const stateKey = this.stateKey(result);
+    const enriched: DiffSnapshot = {
+      ...result,
+      favorites: this.context.workspaceState.get<string[]>(`${stateKey}:favorites`, []),
+      reviewedFiles: this.context.workspaceState.get<string[]>(`${stateKey}:reviewed`, []),
+      triage: this.context.workspaceState.get<Record<string, 'agreed' | 'skipped'>>(`${stateKey}:triage`, {}),
+    };
+    this.lastSnapshot = enriched;
+    this.decorateFindings(enriched);
+    session.config = {
+      ...session.config,
+      repositoryPath: enriched.repository.path,
+      baseBranch: enriched.repository.baseBranch,
+      authorIds: enriched.activeAuthorIds,
+      authorKeyword: enriched.activeAuthorKeyword,
+      commitHash: enriched.activeCommit,
+    };
+    await this.saveSessions(sessions);
+    return { snapshot: enriched, session, sessions };
+  }
+
+  async createSession(sourceId?: string): Promise<ExplorerSession | undefined> {
+    const sessions = this.sessions();
+    const source = sessions.find((session) => session.id === sourceId) ?? sessions[0];
+    const suggested = `Session ${sessions.length + 1}`;
+    const name = await vscode.window.showInputBox({
+      title: 'Create Branch Diff session',
+      prompt: 'Each session keeps its own workspace folder and diff filters.',
+      value: suggested,
+      validateInput: (value) => value.trim() ? undefined : 'A session name is required.',
+    });
+    if (!name) return undefined;
+    const session: ExplorerSession = {
+      id: `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name: name.trim(),
+      config: {
+        ...source.config,
+        authorIds: source.config.authorIds ? [...source.config.authorIds] : [],
+        ui: source.config.ui ? { ...source.config.ui } : {},
+      },
+    };
+    sessions.push(session);
+    await this.saveSessions(sessions);
+    return session;
+  }
+
+  async renameSession(sessionId: string): Promise<void> {
+    const sessions = this.sessions();
+    const session = sessions.find((candidate) => candidate.id === sessionId);
+    if (!session) return;
+    const name = await vscode.window.showInputBox({
+      title: 'Rename Branch Diff session',
+      value: session.name,
+      validateInput: (value) => value.trim() ? undefined : 'A session name is required.',
+    });
+    if (!name || name.trim() === session.name) return;
+    session.name = name.trim();
+    await this.saveSessions(sessions);
+  }
+
+  async deleteSession(sessionId: string): Promise<ExplorerSession | undefined> {
+    const sessions = this.sessions();
+    if (sessions.length === 1) {
+      void vscode.window.showInformationMessage('Branch Diff Explorer keeps one default session. Create another session before deleting this one.');
+      return sessions[0];
+    }
+    const session = sessions.find((candidate) => candidate.id === sessionId);
+    if (!session) return sessions[0];
+    const choice = await vscode.window.showWarningMessage(`Delete the “${session.name}” session?`, { modal: true }, 'Delete');
+    if (choice !== 'Delete') return session;
+    const remaining = sessions.filter((candidate) => candidate.id !== sessionId);
+    await this.saveSessions(remaining);
+    return remaining[0];
+  }
+
+  async saveSessionUi(sessionId: string, ui: SessionUiConfig): Promise<void> {
+    const sessions = this.sessions();
+    const session = sessions.find((candidate) => candidate.id === sessionId);
+    if (!session) return;
+    session.config.ui = { ...ui };
+    await this.saveSessions(sessions);
+  }
+
+  async openPanel(request: ViewRequest = {}): Promise<void> {
+    const panel = vscode.window.createWebviewPanel(
+      'branchDiffExplorer.panel',
+      'Branch Diff Explorer',
+      vscode.ViewColumn.Active,
+      { enableScripts: true, retainContextWhenHidden: true },
+    );
+    const client = new ExplorerWebview(this, panel.webview);
+    this.clients.add(client);
+    panel.onDidDispose(() => {
+      client.dispose();
+      this.clients.delete(client);
+    });
+    await client.refresh(request);
+  }
+
+  async openFile(snapshot: DiffSnapshot, path: string, source: ChangedFile['source']): Promise<void> {
+    const file = snapshot.files.find((candidate) => candidate.path === path && candidate.source === source);
+    if (!file) return;
+    if (source === 'author' || source === 'commit') {
+      const document = await vscode.workspace.openTextDocument({ language: 'diff', content: file.patch });
+      await vscode.window.showTextDocument(document, { preview: true });
+      return;
+    }
+
+    const repository = new GitRepository(snapshot.repository.path);
+    const leftRef = source === 'committed' ? snapshot.repository.baseBranch : source === 'staged' ? 'HEAD' : ':';
+    const rightRef = source === 'committed' ? 'HEAD' : ':';
+    const left = this.content.put(await this.contentForRef(repository, leftRef, file.previousPath ?? file.path));
+    const right = source === 'unstaged'
+      ? vscode.Uri.file(vscode.Uri.joinPath(vscode.Uri.file(snapshot.repository.path), file.path).fsPath)
+      : this.content.put(await this.contentForRef(repository, rightRef, file.path));
+    const title = `${file.path} (${source})`;
+    await vscode.commands.executeCommand('vscode.diff', left, right, title, { preview: true });
+  }
+
+  async openPath(repositoryPath: string | undefined, path: string, line?: number): Promise<void> {
+    const target = this.safeTarget(repositoryPath, path);
+    if (!target) {
+      void vscode.window.showWarningMessage('Branch Diff Explorer refused to open a reviewer path outside the repository.');
+      return;
+    }
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.file(target));
+    const editor = await vscode.window.showTextDocument(document, { preview: true });
+    if (line && line > 0) {
+      const position = new vscode.Position(Math.min(line - 1, Math.max(0, document.lineCount - 1)), 0);
+      editor.selection = new vscode.Selection(position, position);
+      editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+    }
+  }
+
+  async copyPath(repositoryPath: string | undefined, path: string, kind: 'absolute' | 'relative' | 'name' | 'uri'): Promise<void> {
+    const target = this.safeTarget(repositoryPath, path);
+    if (!target || !repositoryPath) return;
+    const value = kind === 'absolute'
+      ? target
+      : kind === 'name'
+        ? basename(target)
+        : kind === 'uri'
+          ? vscode.Uri.file(target).toString()
+          : relative(repositoryPath, target).replaceAll('\\', '/');
+    await vscode.env.clipboard.writeText(value);
+    void vscode.window.setStatusBarMessage(`Branch Diff Explorer: copied ${kind} path`, 1800);
+  }
+
+  async revealPath(repositoryPath: string | undefined, path: string): Promise<void> {
+    const target = this.safeTarget(repositoryPath, path);
+    if (!target) return;
+    await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(target));
+  }
+
+  async toggleFavorite(snapshot: DiffSnapshot, path: string): Promise<void> {
+    await this.toggleStringState(snapshot, 'favorites', path);
+  }
+
+  async toggleReviewed(snapshot: DiffSnapshot, path: string): Promise<void> {
+    await this.toggleStringState(snapshot, 'reviewed', path);
+  }
+
+  async triage(snapshot: DiffSnapshot, findingId: string, decision: 'agreed' | 'skipped'): Promise<void> {
+    const key = `${this.stateKey(snapshot)}:triage`;
+    const current = this.context.workspaceState.get<Record<string, 'agreed' | 'skipped'>>(key, {});
+    const next = { ...current, [findingId]: current[findingId] === decision ? undefined : decision };
+    if (!next[findingId]) delete next[findingId];
+    await this.context.workspaceState.update(key, next);
+  }
+
+  private async contentForRef(repository: GitRepository, ref: string, path: string): Promise<string> {
+    try {
+      return await runGit(repository.rootPath, ['show', `${ref}:${path}`]);
+    } catch {
+      // New/deleted files have no content on one side of a diff.
+      return '';
+    }
+  }
+
+  private safeTarget(repositoryPath: string | undefined, path: string): string | undefined {
+    if (!repositoryPath) return undefined;
+    const target = resolve(repositoryPath, path);
+    const targetRelative = relative(repositoryPath, target);
+    return targetRelative === '..' || targetRelative.startsWith(`..${sep}`) || isAbsolute(targetRelative) ? undefined : target;
+  }
+
+  private stateKey(snapshot: DiffSnapshot): string {
+    return `branchDiffExplorer.state:${snapshot.repository.path}:${snapshot.repository.branch}`;
+  }
+
+  private sessions(): ExplorerSession[] {
+    const stored = this.context.workspaceState.get<unknown>(SESSIONS_STORAGE_KEY);
+    if (!Array.isArray(stored)) return [{ id: 'default', name: 'Default', config: {} }];
+    const valid = stored.flatMap((candidate) => {
+      if (!candidate || typeof candidate !== 'object') return [];
+      const raw = candidate as Partial<ExplorerSession>;
+      return typeof raw.id === 'string' && typeof raw.name === 'string' && raw.config && typeof raw.config === 'object'
+        ? [{ id: raw.id, name: raw.name, config: raw.config }]
+        : [];
+    });
+    return valid.length ? valid : [{ id: 'default', name: 'Default', config: {} }];
+  }
+
+  private async saveSessions(sessions: ExplorerSession[]): Promise<void> {
+    await this.context.workspaceState.update(SESSIONS_STORAGE_KEY, sessions);
+  }
+
+  private async toggleStringState(snapshot: DiffSnapshot, kind: 'favorites' | 'reviewed', value: string): Promise<void> {
+    const key = `${this.stateKey(snapshot)}:${kind}`;
+    const current = this.context.workspaceState.get<string[]>(key, []);
+    const next = current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
+    await this.context.workspaceState.update(key, next);
+  }
+
+  private decorateFindings(snapshot: DiffSnapshot | undefined): void {
+    if (!snapshot) return;
+    for (const editor of vscode.window.visibleTextEditors) {
+      if (editor.document.uri.scheme !== 'file') continue;
+      const path = relative(snapshot.repository.path, editor.document.uri.fsPath).replaceAll('\\', '/');
+      for (const severity of Object.keys(this.decorations) as FindingSeverity[]) {
+        const ranges = snapshot.reviewer.findings
+          .filter((finding) => finding.file === path && finding.severity === severity && finding.line)
+          .map((finding) => {
+            const line = Math.min(Math.max(0, finding.line! - 1), Math.max(0, editor.document.lineCount - 1));
+            return { range: new vscode.Range(line, 0, line, 0), hoverMessage: `**${finding.severity}** — ${finding.title}${finding.message ? `\n\n${finding.message}` : ''}` };
+          });
+        editor.setDecorations(this.decorations[severity], ranges);
+      }
+    }
+  }
+
+  private scheduleRefresh(): void {
+    if (this.refreshTimer) clearTimeout(this.refreshTimer);
+    this.refreshTimer = setTimeout(() => this.refreshAll(), 250);
+  }
+
+  private refreshAll(): void {
+    this.sidebar.refresh();
+    for (const client of this.clients) void client.refresh();
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function activate(context: vscode.ExtensionContext): void {
+  new ExplorerController(context);
+}
+
+export function deactivate(): void {}

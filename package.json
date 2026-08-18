@@ -1,0 +1,119 @@
+{
+  "name": "branch-diff-explorer",
+  "displayName": "Branch Diff Explorer",
+  "description": "Search and review only the changes in your Git branch.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://example.invalid/branch-diff-explorer"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
+  "keywords": [
+    "git",
+    "diff",
+    "branch",
+    "search",
+    "review"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onView:branchDiffExplorer.view",
+    "onCommand:branchDiffExplorer.open"
+  ],
+  "main": "./dist/extension.js",
+  "icon": "media/icon.png",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "branchDiffExplorer",
+          "title": "Branch Diff",
+          "icon": "media/activitybar.svg"
+        }
+      ]
+    },
+    "views": {
+      "branchDiffExplorer": [
+        {
+          "type": "webview",
+          "id": "branchDiffExplorer.view",
+          "name": "Branch Diff"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "branchDiffExplorer.open",
+        "title": "Branch Diff Explorer: Open Sidebar"
+      },
+      {
+        "command": "branchDiffExplorer.openPanel",
+        "title": "Branch Diff Explorer: Open in Panel"
+      },
+      {
+        "command": "branchDiffExplorer.refresh",
+        "title": "Branch Diff Explorer: Refresh"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "branchDiffExplorer.open",
+        "key": "ctrl+shift+d",
+        "mac": "cmd+shift+d"
+      },
+      {
+        "command": "branchDiffExplorer.openPanel",
+        "key": "ctrl+shift+t",
+        "mac": "cmd+shift+t"
+      }
+    ],
+    "configuration": {
+      "title": "Branch Diff Explorer",
+      "properties": {
+        "branchDiffExplorer.defaultBaseBranch": {
+          "type": "string",
+          "default": "",
+          "description": "Base branch to compare against. Leave empty to auto-detect origin's default branch, main, or master."
+        },
+        "branchDiffExplorer.maxChangedLines": {
+          "type": "number",
+          "default": 4000,
+          "minimum": 100,
+          "maximum": 20000,
+          "description": "Maximum changed lines sent to the Branch Diff Explorer view."
+        }
+      }
+    },
+    "menus": {
+      "editor/title": [
+        {
+          "command": "branchDiffExplorer.openPanel",
+          "group": "navigation@8",
+          "when": "branchDiffExplorer.hasRepository"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.json --sourceMap",
+    "watch": "tsc --project tsconfig.json --sourceMap --watch",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "package": "npm run build && ./node_modules/.bin/vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.1",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

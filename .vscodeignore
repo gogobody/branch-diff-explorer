@@ -1,0 +1,8 @@
+.vscode/**
+src/**
+test/**
+dist-types/**
+.gitignore
+tsconfig.json
+vitest.config.*
+*.vsix
