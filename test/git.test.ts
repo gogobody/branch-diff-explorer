@@ -134,6 +134,7 @@ describe('GitRepository author filtering', () => {
     await writeFile(join(repositoryPath, 'src', 'bob.ts'), 'export const bob = "updated";\n');
     await runGit(repositoryPath, ['add', '.']);
     await runGit(repositoryPath, ['commit', '-m', 'Bob updates the same file']);
+    const bobUpdateHash = (await runGit(repositoryPath, ['rev-parse', 'HEAD'])).trim();
     await writeFile(join(repositoryPath, 'uncommitted.ts'), 'export const uncommitted = true;\n');
 
     const repository = new GitRepository(repositoryPath);
@@ -146,7 +147,7 @@ describe('GitRepository author filtering', () => {
       authorIds: [authorId('Bob', 'bob@example.test')],
     });
     expect(bobChanges.files).toHaveLength(1);
-    expect(bobChanges.files[0]).toMatchObject({ path: 'src/bob.ts', source: 'author', sources: ['author'], additions: 2, deletions: 1 });
+    expect(bobChanges.files[0]).toMatchObject({ path: 'src/bob.ts', source: 'author', sources: ['author'], commitHash: bobUpdateHash, additions: 2, deletions: 1 });
     expect(bobChanges.notice).toContain('Uncommitted work is excluded');
 
     const keywordChanges = await repository.snapshot({ baseBranch: 'main', authorKeyword: 'bob@example' });

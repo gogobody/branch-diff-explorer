@@ -11,7 +11,8 @@ features.
   several commits or Git states; its line totals are combined.
 - Compare your branch with any local or remote base branch.
 - Filter by file change kind, Git state, extension, and glob patterns.
-- Open normal changes in VS Code's side-by-side diff editor.
+- Open normal changes, author-filtered changes, and single commits in VS Code's
+  native side-by-side diff editor.
 - Inspect one commit at a time.
 - **Filter branch diffs by commit author.** Select one or more authors and the
   view shows only patches produced by their commits after the selected base.

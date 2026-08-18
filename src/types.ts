@@ -14,6 +14,8 @@ export interface ChangedFile {
   source: ChangeSource;
   /** All Git states represented by this path when changes are combined. */
   sources?: ChangeSource[];
+  /** Commit used for an author or single-commit side-by-side diff. */
+  commitHash?: string;
   additions: number;
   deletions: number;
   lines: ChangedLine[];

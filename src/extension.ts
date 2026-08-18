@@ -398,20 +398,25 @@ class ExplorerController implements vscode.Disposable {
   async openFile(snapshot: DiffSnapshot, path: string, source: ChangedFile['source']): Promise<void> {
     const file = snapshot.files.find((candidate) => candidate.path === path && candidate.source === source);
     if (!file) return;
-    if (source === 'author' || source === 'commit') {
-      const document = await vscode.workspace.openTextDocument({ language: 'diff', content: file.patch });
-      await vscode.window.showTextDocument(document, { preview: true });
-      return;
-    }
-
     const repository = new GitRepository(snapshot.repository.path, this.gitRunOptions(vscode.Uri.file(snapshot.repository.path)));
-    const leftRef = source === 'committed' ? snapshot.repository.baseBranch : source === 'staged' ? 'HEAD' : ':';
-    const rightRef = source === 'committed' ? 'HEAD' : ':';
+    const revision = (source === 'author' || source === 'commit') ? file.commitHash ?? snapshot.activeCommit : undefined;
+    const leftRef = revision
+      ? `${revision}^`
+      : source === 'committed' || source === 'author' || source === 'commit'
+        ? snapshot.repository.baseBranch
+        : source === 'staged'
+          ? 'HEAD'
+          : ':';
+    const rightRef = revision
+      ? revision
+      : source === 'committed' || source === 'author' || source === 'commit'
+        ? 'HEAD'
+        : ':';
     const left = this.content.put(await this.contentForRef(repository, leftRef, file.previousPath ?? file.path));
     const right = source === 'unstaged'
       ? vscode.Uri.file(vscode.Uri.joinPath(vscode.Uri.file(snapshot.repository.path), file.path).fsPath)
       : this.content.put(await this.contentForRef(repository, rightRef, file.path));
-    const title = `${file.path} (${source})`;
+    const title = revision ? `${file.path} (${revision.slice(0, 8)})` : `${file.path} (${source})`;
     await vscode.commands.executeCommand('vscode.diff', left, right, title, { preview: true });
   }
 

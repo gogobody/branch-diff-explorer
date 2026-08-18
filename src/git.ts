@@ -93,7 +93,7 @@ function pathFromPatch(patch: string, status: ChangeStatus): { path: string; pre
 }
 
 /** Parses a no-color Git patch into file and changed-line records. */
-export function parsePatch(patch: string, source: ChangeSource): ChangedFile[] {
+export function parsePatch(patch: string, source: ChangeSource, commitHash?: string): ChangedFile[] {
   if (!patch.trim()) return [];
   const chunks = patch
     .split(/^diff --git /m)
@@ -134,6 +134,7 @@ export function parsePatch(patch: string, source: ChangeSource): ChangedFile[] {
       previousPath,
       status,
       source,
+      commitHash,
       additions: lines.filter((line) => line.kind === 'addition').length,
       deletions: lines.filter((line) => line.kind === 'deletion').length,
       lines,
@@ -154,7 +155,7 @@ export function coalesceChangedFiles(files: ChangedFile[]): ChangedFile[] {
       byPath.set(file.path, { ...file, sources: file.sources ?? [file.source], lines: [...file.lines] });
       continue;
     }
-    const preferred = sourcePriority(file.source) >= sourcePriority(existing.source) ? file : existing;
+    const preferred = sourcePriority(file.source) > sourcePriority(existing.source) ? file : existing;
     const sources = [...new Set([...(existing.sources ?? [existing.source]), ...(file.sources ?? [file.source])])];
     byPath.set(file.path, {
       ...existing,
@@ -162,6 +163,7 @@ export function coalesceChangedFiles(files: ChangedFile[]): ChangedFile[] {
       sources,
       status: preferred.status,
       previousPath: preferred.previousPath ?? existing.previousPath,
+      commitHash: preferred.commitHash ?? existing.commitHash,
       additions: existing.additions + file.additions,
       deletions: existing.deletions + file.deletions,
       lines: [...existing.lines, ...file.lines],
@@ -278,7 +280,7 @@ export class GitRepository {
       files = [];
       notice = 'This repository has no commits yet. Create a commit to compare branch changes.';
     } else if (activeCommit) {
-      files = parsePatch(await this.commitPatch(activeCommit), 'commit');
+      files = parsePatch(await this.commitPatch(activeCommit), 'commit', activeCommit);
       notice = 'Showing one commit. Git state filters do not apply in commit mode.';
     } else if (activeAuthorIds.length || activeAuthorKeyword) {
       const selected = new Set(activeAuthorIds);
@@ -288,7 +290,8 @@ export class GitRepository {
         const keywordMatches = !keyword || `${commit.authorName} ${commit.authorEmail}`.toLocaleLowerCase().includes(keyword);
         return isSelected && keywordMatches;
       }).map((commit) => commit.hash);
-      files = hashes.length ? parsePatch(await this.patchesForCommits(hashes), 'author') : [];
+      const patches = await Promise.all(hashes.map((hash) => this.commitPatch(hash)));
+      files = patches.flatMap((patch, index) => parsePatch(patch, 'author', hashes[index]));
       const filterLabel = activeAuthorIds.length
         ? `the selected author${activeAuthorIds.length === 1 ? '' : 's'}`
         : `authors matching “${activeAuthorKeyword}”`;
@@ -369,10 +372,6 @@ export class GitRepository {
 
   private commitPatch(hash: string): Promise<string> {
     return this.run(['show', '--format=', '--no-color', '--no-ext-diff', '--find-renames=40%', '--patch', hash, '--']);
-  }
-
-  private patchesForCommits(hashes: string[]): Promise<string> {
-    return this.run(['show', '--format=', '--no-color', '--no-ext-diff', '--find-renames=40%', '--patch', '--reverse', ...hashes, '--']);
   }
 
   private run(args: string[]): Promise<string> {
