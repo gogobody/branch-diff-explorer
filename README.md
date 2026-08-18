@@ -25,6 +25,8 @@ features.
   `src/generated`, `**/test/**`) without changing the base Git diff.
 - Right-click any changed file to open it, open its diff, reveal it in the OS
   file manager, or copy its relative path, absolute path, file name, or URI.
+  Right-click a directory to reveal it in Explorer or the OS, search within it,
+  or copy its relative path, absolute path, name, or URI.
 - Reviewer cockpit compatibility: reads `.diffly/findings.json`, shows briefing,
   findings and missing-work items, supports Agree/Skip triage, and decorates
   flagged lines in open editors.

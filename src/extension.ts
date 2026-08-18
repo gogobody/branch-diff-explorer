@@ -42,7 +42,7 @@ interface ExplorerViewState {
 }
 
 interface ViewMessage {
-  type: 'ready' | 'refresh' | 'switchSession' | 'createSession' | 'renameSession' | 'deleteSession' | 'saveSession' | 'openFile' | 'openPanel' | 'openSettings' | 'openPath' | 'copyPath' | 'revealPath' | 'toggleFavorite' | 'toggleReviewed' | 'triage' | 'info';
+  type: 'ready' | 'refresh' | 'switchSession' | 'createSession' | 'renameSession' | 'deleteSession' | 'saveSession' | 'openFile' | 'openPanel' | 'openSettings' | 'openPath' | 'copyPath' | 'revealPath' | 'revealInExplorer' | 'findInFolder' | 'toggleFavorite' | 'toggleReviewed' | 'triage' | 'info';
   request?: ViewRequest;
   sessionId?: string;
   ui?: SessionUiConfig;
@@ -159,6 +159,12 @@ class ExplorerWebview implements vscode.Disposable {
         return;
       case 'revealPath':
         if (message.path) await this.controller.revealPath(this.snapshot?.repository.path, message.path);
+        return;
+      case 'revealInExplorer':
+        if (message.path) await this.controller.revealInExplorer(this.snapshot?.repository.path, message.path);
+        return;
+      case 'findInFolder':
+        if (message.path) await this.controller.findInFolder(this.snapshot?.repository.path, message.path);
         return;
       case 'toggleFavorite':
         if (this.snapshot && message.path) {
@@ -469,6 +475,19 @@ class ExplorerController implements vscode.Disposable {
     const target = this.safeTarget(repositoryPath, path);
     if (!target) return;
     await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(target));
+  }
+
+  async revealInExplorer(repositoryPath: string | undefined, path: string): Promise<void> {
+    const target = this.safeTarget(repositoryPath, path);
+    if (!target) return;
+    await vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(target));
+  }
+
+  async findInFolder(repositoryPath: string | undefined, path: string): Promise<void> {
+    const target = this.safeTarget(repositoryPath, path);
+    if (!target || !repositoryPath) return;
+    const relativePath = relative(repositoryPath, target).replaceAll('\\', '/');
+    await vscode.commands.executeCommand('workbench.action.findInFiles', { filesToInclude: `${relativePath}/**` });
   }
 
   async toggleFavorite(snapshot: DiffSnapshot, path: string): Promise<void> {

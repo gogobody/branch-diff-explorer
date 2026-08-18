@@ -387,6 +387,7 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       title.append(element('span', 'folder-chevron', collapsed ? '›' : '⌄'), element('span', '', name), element('span', 'folder-count', String(directoryEntryCount(node))));
       title.title = collapsed ? 'Expand ' + name : 'Collapse ' + name;
       title.addEventListener('click', () => { local.collapsedDirectories[key] = !collapsed; renderResults(); });
+      title.addEventListener('contextmenu', (event) => showFolderContextMenu(event, directoryPath, name));
       directory.append(title);
       if (!collapsed) {
         [...node.directories.entries()].sort(([left], [right]) => left.localeCompare(right)).forEach(([childName, child]) => {
@@ -447,6 +448,31 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       addAction('Copy absolute path', () => vscode.postMessage({ type: 'copyPath', path: file.path, copyKind: 'absolute' }));
       addAction('Copy file name', () => vscode.postMessage({ type: 'copyPath', path: file.path, copyKind: 'name' }));
       addAction('Copy file URI', () => vscode.postMessage({ type: 'copyPath', path: file.path, copyKind: 'uri' }));
+      menu.style.left = Math.max(4, Math.min(event.clientX, window.innerWidth - 210)) + 'px';
+      menu.style.top = Math.max(4, Math.min(event.clientY, window.innerHeight - 250)) + 'px';
+      document.body.append(menu);
+      contextMenu = menu;
+    }
+
+    function showFolderContextMenu(event, path, name) {
+      event.preventDefault();
+      hideContextMenu();
+      const menu = element('div', 'context-menu');
+      const addAction = (label, action) => {
+        const item = element('button', '', label);
+        item.addEventListener('click', () => { hideContextMenu(); action(); });
+        menu.append(item);
+      };
+      const separator = () => menu.append(element('div', 'menu-separator'));
+      addAction('Reveal in Explorer', () => vscode.postMessage({ type: 'revealInExplorer', path }));
+      addAction('Reveal in file manager', () => vscode.postMessage({ type: 'revealPath', path }));
+      addAction('Find in folder', () => vscode.postMessage({ type: 'findInFolder', path }));
+      separator();
+      addAction('Copy relative path', () => vscode.postMessage({ type: 'copyPath', path, copyKind: 'relative' }));
+      addAction('Copy absolute path', () => vscode.postMessage({ type: 'copyPath', path, copyKind: 'absolute' }));
+      addAction('Copy folder name', () => vscode.postMessage({ type: 'copyPath', path, copyKind: 'name' }));
+      addAction('Copy folder URI', () => vscode.postMessage({ type: 'copyPath', path, copyKind: 'uri' }));
+      menu.setAttribute('aria-label', 'Folder actions for ' + name);
       menu.style.left = Math.max(4, Math.min(event.clientX, window.innerWidth - 210)) + 'px';
       menu.style.top = Math.max(4, Math.min(event.clientY, window.innerHeight - 250)) + 'px';
       document.body.append(menu);
