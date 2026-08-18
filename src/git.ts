@@ -174,8 +174,8 @@ export function coalesceChangedFiles(files: ChangedFile[]): ChangedFile[] {
 }
 
 /**
- * Keep the selected scope (for example, one author) but use the final patch
- * from the branch base to the working tree for line counts and diff content.
+ * Keep only listed file paths while using the final patch from the branch base
+ * to the working tree for line counts and diff content.
  */
 export function applyOverallPatch(scopeFiles: ChangedFile[], overallFiles: ChangedFile[]): ChangedFile[] {
   const scoped = new Map(scopeFiles.map((file) => [file.path, file]));
@@ -192,6 +192,44 @@ export function applyOverallPatch(scopeFiles: ChangedFile[], overallFiles: Chang
       patch: overall.patch,
     }];
   });
+}
+
+/** Builds two source-only views from selected-commit patch hunks for a diff editor. */
+export function authorPatchSides(patch: string): { left: string; right: string } {
+  const left: string[] = [];
+  const right: string[] = [];
+  let insideHunk = false;
+  let hunkCount = 0;
+
+  for (const row of patch.split('\n')) {
+    if (row.startsWith('diff --git ')) {
+      insideHunk = false;
+      continue;
+    }
+    if (row.startsWith('@@ ')) {
+      if (hunkCount > 0) {
+        left.push('');
+        right.push('');
+      }
+      left.push(row);
+      right.push(row);
+      hunkCount += 1;
+      insideHunk = true;
+      continue;
+    }
+    if (!insideHunk || row.startsWith('\\')) continue;
+    if (row.startsWith(' ') || !row) {
+      const value = row.startsWith(' ') ? row.slice(1) : row;
+      left.push(value);
+      right.push(value);
+    } else if (row.startsWith('-') && !row.startsWith('---')) {
+      left.push(row.slice(1));
+    } else if (row.startsWith('+') && !row.startsWith('+++')) {
+      right.push(row.slice(1));
+    }
+  }
+
+  return { left: left.join('\n'), right: right.join('\n') };
 }
 
 function sourcePriority(source: ChangeSource): number {
@@ -331,7 +369,7 @@ export class GitRepository {
     }
 
     files = coalesceChangedFiles(files);
-    if (hasHead && !activeCommit) {
+    if (hasHead && !activeCommit && !activeAuthorIds.length && !activeAuthorKeyword) {
       const overallFiles = parsePatch(await this.workingTreePatch(baseBranch), 'committed');
       files = applyOverallPatch(files, overallFiles);
     }

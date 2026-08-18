@@ -15,6 +15,8 @@ features.
   native side-by-side diff editor.
 - File rows open the complete base-branch-to-working-tree diff; when a single
   commit is selected, they open that commit's parent-to-commit diff instead.
+- When filtering by commit author, file diffs include only the matching authors'
+  commit hunks rather than unrelated branch changes.
 - Go to Definition, Declaration, Type Definition, and Implementation from a
   virtual Git diff pane; the destination opens in the active workspace source.
 - Inspect one commit at a time.
