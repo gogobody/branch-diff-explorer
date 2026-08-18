@@ -21,6 +21,7 @@ describe('Branch Diff Explorer webview', () => {
     expect(html).toContain('showFolderContextMenu');
     expect(html).toContain('Reveal in Explorer');
     expect(html).toContain('Find in folder');
+    expect(html).toContain("file.status !== 'deleted'");
     expect(html).toContain('summary-totals');
     expect(html).toContain('Open Settings');
     expect(html).toContain('renderTreeRoot(tree, buildDirectoryTree(files))');

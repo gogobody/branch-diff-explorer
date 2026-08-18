@@ -335,7 +335,8 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       const container = document.getElementById('results');
       if (!container || !model.snapshot) return;
       container.replaceChildren();
-      const files = model.snapshot.files.filter(fileMatches);
+      // Deleted files remain in the aggregate totals but do not occupy tree space.
+      const files = model.snapshot.files.filter((file) => file.status !== 'deleted' && fileMatches(file));
       const summary = element('div', 'summary');
       const left = element('span'); left.append(element('strong', '', formatCount(model.snapshot.totals.files)), document.createTextNode(' files'));
       if (files.length !== model.snapshot.files.length) left.append(element('span', 'summary-filtered', formatCount(files.length) + ' shown'));
