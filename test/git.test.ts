@@ -443,6 +443,43 @@ describe('GitRepository author filtering', () => {
     }]);
     expect(snapshot.files[0].patch).toContain('two updated');
   });
+
+  it('includes matching author commits older than the previous 250-commit cutoff', async () => {
+    const repositoryPath = await mkdtemp(join(tmpdir(), 'branch-diff-explorer-long-history-'));
+    temporaryDirectories.push(repositoryPath);
+    await runGit(repositoryPath, ['init', '--initial-branch=main']);
+    await runGit(repositoryPath, ['config', 'user.name', 'Alice']);
+    await runGit(repositoryPath, ['config', 'user.email', 'alice@example.test']);
+    await writeFile(join(repositoryPath, 'example.c'), 'base\n');
+    await runGit(repositoryPath, ['add', '.']);
+    await runGit(repositoryPath, ['commit', '-m', 'base']);
+    await runGit(repositoryPath, ['checkout', '-b', 'feature']);
+    await writeFile(join(repositoryPath, 'example.c'), 'base\nold author line\n');
+    await runGit(repositoryPath, ['add', '.']);
+    await runGit(repositoryPath, ['commit', '-m', 'old Alice change']);
+
+    await runGit(repositoryPath, ['config', 'user.name', 'Bob']);
+    await runGit(repositoryPath, ['config', 'user.email', 'bob@example.test']);
+    for (let index = 0; index < 250; index += 1) {
+      await runGit(repositoryPath, ['commit', '--allow-empty', '-m', `Bob filler ${index}`]);
+    }
+
+    await runGit(repositoryPath, ['config', 'user.name', 'Alice']);
+    await runGit(repositoryPath, ['config', 'user.email', 'alice@example.test']);
+    await writeFile(join(repositoryPath, 'example.c'), 'base\nold author line\nrecent author line\n');
+    await runGit(repositoryPath, ['add', '.']);
+    await runGit(repositoryPath, ['commit', '-m', 'recent Alice change']);
+
+    const snapshot = await new GitRepository(repositoryPath).snapshot({
+      baseBranch: 'main',
+      authorKeyword: 'alice@example',
+    });
+    const file = snapshot.files.find((candidate) => candidate.path === 'example.c');
+    expect(snapshot.notice).toContain('Showing 2 commits');
+    expect(file).toMatchObject({ additions: 2, deletions: 0 });
+    expect(file?.patch).toContain('+old author line');
+    expect(file?.patch).toContain('+recent author line');
+  }, 30000);
 });
 
 describe('GitRepository comparison base', () => {

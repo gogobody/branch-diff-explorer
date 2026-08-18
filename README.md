@@ -37,6 +37,9 @@ features.
 - **Filter branch diffs by commit author.** Select one or more authors and the
   view shows only patches produced by their commits after the selected base.
   The **Author contains** field also filters by a name or email keyword.
+- Author filtering scans the complete branch range instead of silently stopping
+  at 250 commits. Matching patches are loaded in bounded batches for large
+  histories.
 - Exclude directories by name, relative directory path, or glob (`dist`,
   `src/generated`, `**/test/**`) without changing the base Git diff.
 - Right-click any changed file to open it, open its diff, reveal it in the OS

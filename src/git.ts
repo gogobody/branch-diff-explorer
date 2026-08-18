@@ -19,6 +19,8 @@ const FIELD_SEPARATOR = '\u001f';
 // Branch-wide patches can be substantially larger than Node's small default
 // stdout buffer. The webview still caps line previews separately.
 export const DEFAULT_GIT_MAX_OUTPUT_BYTES = 256 * 1024 * 1024;
+const AUTHOR_PATCH_BATCH_SIZE = 64;
+const AUTHOR_PATCH_BATCH_CONCURRENCY = 4;
 
 export interface GitRunOptions {
   maxBuffer?: number;
@@ -536,6 +538,39 @@ function parseCommitRecords(output: string): CommitRecord[] {
     });
 }
 
+interface CommitPatchRecord {
+  hash: string;
+  patch: string;
+}
+
+function parseCommitPatchRecords(output: string): CommitPatchRecord[] {
+  return output.split(RECORD_SEPARATOR).flatMap((record) => {
+    const separator = record.indexOf(FIELD_SEPARATOR);
+    if (separator < 0) return [];
+    const hash = record.slice(0, separator).trim();
+    if (!hash) return [];
+    return [{ hash, patch: record.slice(separator + 1).replace(/^\r?\n/, '') }];
+  });
+}
+
+async function mapWithConcurrency<T, R>(
+  values: T[],
+  concurrency: number,
+  map: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await map(values[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 function collectAuthors(commits: CommitRecord[]): CommitAuthor[] {
   const byId = new Map<string, CommitAuthor>();
   for (const commit of commits) {
@@ -643,8 +678,8 @@ export class GitRepository {
         const keywordMatches = !keyword || `${commit.authorName} ${commit.authorEmail}`.toLocaleLowerCase().includes(keyword);
         return isSelected && keywordMatches;
       }).map((commit) => commit.hash);
-      const patches = await Promise.all(hashes.map((hash) => this.commitPatch(hash)));
-      files = patches.flatMap((patch, index) => parsePatch(patch, 'author', hashes[index]));
+      const patches = await this.commitPatches(hashes);
+      files = patches.flatMap(({ hash, patch }) => parsePatch(patch, 'author', hash));
       const filterLabel = activeAuthorIds.length
         ? `the selected author${activeAuthorIds.length === 1 ? '' : 's'}`
         : `authors matching “${activeAuthorKeyword}”`;
@@ -711,9 +746,24 @@ export class GitRepository {
 
   private async commitsSince(baseBranch: string): Promise<CommitRecord[]> {
     const output = await this.run([
-      'log', '--format=%H%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e', '--max-count=250', `${baseBranch}..HEAD`,
+      'log', '--format=%H%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e', `${baseBranch}..HEAD`,
     ]);
     return parseCommitRecords(output);
+  }
+
+  private async commitPatches(hashes: string[]): Promise<CommitPatchRecord[]> {
+    const batches: string[][] = [];
+    for (let index = 0; index < hashes.length; index += AUTHOR_PATCH_BATCH_SIZE) {
+      batches.push(hashes.slice(index, index + AUTHOR_PATCH_BATCH_SIZE));
+    }
+    const results = await mapWithConcurrency(batches, AUTHOR_PATCH_BATCH_CONCURRENCY, async (batch) => {
+      const output = await this.run([
+        'show', '--no-walk=unsorted', `--format=${RECORD_SEPARATOR}%H${FIELD_SEPARATOR}`,
+        '--no-color', '--no-ext-diff', '--find-renames=40%', '--patch', ...batch, '--',
+      ]);
+      return parseCommitPatchRecords(output);
+    });
+    return results.flat();
   }
 
   private async commitsBehind(baseBranch: string): Promise<number> {
