@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import { basename } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { basename, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
   type ChangedFile,
@@ -218,6 +219,59 @@ export function revertPatchFromContent(content: string, patch: string): string {
   return lines.join('\n');
 }
 
+/** Returns final additions/deletions between two complete file contents. */
+export function lineChangeTotals(leftContent: string, rightContent: string): { additions: number; deletions: number } {
+  const left = contentLines(leftContent);
+  const right = contentLines(rightContent);
+  let start = 0;
+  while (start < left.length && start < right.length && left[start] === right[start]) start += 1;
+  let leftEnd = left.length;
+  let rightEnd = right.length;
+  while (leftEnd > start && rightEnd > start && left[leftEnd - 1] === right[rightEnd - 1]) {
+    leftEnd -= 1;
+    rightEnd -= 1;
+  }
+  const before = left.slice(start, leftEnd);
+  const after = right.slice(start, rightEnd);
+  if (!before.length || !after.length) return { additions: after.length, deletions: before.length };
+  // A full rewrite of an exceptionally large file should remain responsive.
+  if (before.length * after.length > 25_000_000) return { additions: after.length, deletions: before.length };
+  const editDistance = shortestLineEditDistance(before, after);
+  const common = (before.length + after.length - editDistance) / 2;
+  return { additions: after.length - common, deletions: before.length - common };
+}
+
+function contentLines(content: string): string[] {
+  const lines = content.replaceAll('\r\n', '\n').split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  return lines;
+}
+
+function shortestLineEditDistance(left: string[], right: string[]): number {
+  const maximum = left.length + right.length;
+  const offset = maximum + 1;
+  const frontier = new Int32Array(maximum * 2 + 3);
+  for (let distance = 0; distance <= maximum; distance += 1) {
+    for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
+      const index = offset + diagonal;
+      let x: number;
+      if (diagonal === -distance || (diagonal !== distance && frontier[index - 1] < frontier[index + 1])) {
+        x = frontier[index + 1];
+      } else {
+        x = frontier[index - 1] + 1;
+      }
+      let y = x - diagonal;
+      while (x < left.length && y < right.length && left[x] === right[y]) {
+        x += 1;
+        y += 1;
+      }
+      frontier[index] = x;
+      if (x >= left.length && y >= right.length) return distance;
+    }
+  }
+  return maximum;
+}
+
 function patchHunks(patch: string): PatchHunk[] {
   const hunks: PatchHunk[] = [];
   let current: PatchHunk | undefined;
@@ -394,9 +448,13 @@ export class GitRepository {
     }
 
     files = coalesceChangedFiles(files);
-    if (hasHead && !activeCommit && !activeAuthorIds.length && !activeAuthorKeyword) {
-      const overallFiles = parsePatch(await this.workingTreePatch(baseBranch), 'committed');
-      files = applyOverallPatch(files, overallFiles);
+    if (hasHead && !activeCommit) {
+      if (activeAuthorIds.length || activeAuthorKeyword) {
+        files = await this.applyAuthorTotals(files);
+      } else {
+        const overallFiles = parsePatch(await this.workingTreePatch(baseBranch), 'committed');
+        files = applyOverallPatch(files, overallFiles);
+      }
     }
 
     const totals = {
@@ -461,6 +519,23 @@ export class GitRepository {
   private async workingTreePatch(baseBranch: string): Promise<string> {
     const mergeBase = (await this.run(['merge-base', baseBranch, 'HEAD'])).trim();
     return this.diffPatch([mergeBase]);
+  }
+
+  private async applyAuthorTotals(files: ChangedFile[]): Promise<ChangedFile[]> {
+    const netFiles = await Promise.all(files.map(async (file) => {
+      const right = await this.workingTreeContent(file.path);
+      const left = revertPatchFromContent(right, file.patch);
+      return { ...file, ...lineChangeTotals(left, right) };
+    }));
+    return netFiles.filter((file) => file.additions || file.deletions);
+  }
+
+  private async workingTreeContent(path: string): Promise<string> {
+    try {
+      return await readFile(resolve(this.rootPath, path), 'utf8');
+    } catch {
+      return '';
+    }
   }
 
   private commitPatch(hash: string): Promise<string> {

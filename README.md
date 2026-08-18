@@ -19,6 +19,8 @@ features.
   commit is selected, they open that commit's parent-to-commit diff instead.
 - When filtering by commit author, file diffs include only the matching authors'
   highlighted changes while keeping the rest of the current file visible.
+- Author-filtered line totals are calculated from that final highlighted diff,
+  rather than by adding up edits from every matching commit.
 - Go to Definition, Declaration, Type Definition, and Implementation from a
   virtual Git diff pane; the destination opens in the active workspace source.
 - Inspect one commit at a time.
