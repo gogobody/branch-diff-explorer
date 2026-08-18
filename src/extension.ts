@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
-import { GitRepository, revertPatchFromContent, type GitRunOptions } from './git';
+import { GitRepository, revertPatchWithDiagnostics, type GitRunOptions } from './git';
 import { createWebviewHtml } from './webview';
 import type { ChangedFile, DiffSnapshot, FindingSeverity, SnapshotRequest } from './types';
 
@@ -431,11 +431,17 @@ class ExplorerController implements vscode.Disposable {
     const rightTarget = vscode.Uri.file(resolve(snapshot.repository.path, file.path));
     if (source === 'author') {
       const rightContent = await this.currentContentOrEmpty(rightTarget);
-      const hasBaseVersion = await repository.hasContentAt(snapshot.repository.baseBranch, leftPath);
-      const leftContent = hasBaseVersion ? revertPatchFromContent(rightContent, file.patch) : '';
-      const left = this.content.put(leftContent, leftTarget);
+      // Always invert only the selected authors' patches. In particular, a
+      // file first created by one author can have later lines from another;
+      // using an empty left pane in that case would incorrectly highlight the
+      // other author's lines as well.
+      const reverted = revertPatchWithDiagnostics(rightContent, file.patch);
+      const left = this.content.put(reverted.content, leftTarget);
       const right = this.content.put(rightContent, rightTarget);
-      const title = hasBaseVersion ? `${file.path} (author changes)` : `${file.path} (new file)`;
+      const unresolved = reverted.unmatchedBlocks
+        ? ` · ${reverted.unmatchedBlocks} overwritten or moved change${reverted.unmatchedBlocks === 1 ? '' : 's'}`
+        : '';
+      const title = `${file.path} (author changes${unresolved})`;
       await vscode.commands.executeCommand('vscode.diff', left, right, title, { preview: true });
       return;
     }

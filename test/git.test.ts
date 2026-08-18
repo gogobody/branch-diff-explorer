@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { applyOverallLineTotals, applyOverallPatch, authorId, coalesceChangedFiles, DEFAULT_GIT_MAX_OUTPUT_BYTES, GitRepository, parsePatch, revertPatchFromContent, runGit } from '../src/git';
+import { applyOverallLineTotals, applyOverallPatch, authorId, coalesceChangedFiles, DEFAULT_GIT_MAX_OUTPUT_BYTES, GitRepository, parsePatch, revertPatchFromContent, revertPatchWithDiagnostics, runGit } from '../src/git';
 
 const temporaryDirectories: string[] = [];
 
@@ -124,6 +124,29 @@ index 1234567..fedcba0 100644
       lines: [{ kind: 'deletion', line: 1, text: 'old' }, { kind: 'addition', line: 1, text: 'final' }],
     }]);
   });
+
+  it('keeps an earlier author edit visible after the file is renamed later', () => {
+    const scope = parsePatch(`diff --git a/src/old.ts b/src/old.ts
+index 1234567..abcdef0 100644
+--- a/src/old.ts
++++ b/src/old.ts
+@@ -1 +1 @@
+-before
++after
+`, 'author');
+    const overall = parsePatch(`diff --git a/src/old.ts b/src/new.ts
+similarity index 100%
+rename from src/old.ts
+rename to src/new.ts
+`, 'committed');
+
+    expect(applyOverallPatch(scope, overall)).toMatchObject([{
+      path: 'src/new.ts',
+      previousPath: 'src/old.ts',
+      status: 'renamed',
+      patch: expect.stringContaining('rename to src/new.ts'),
+    }]);
+  });
 });
 
 describe('revertPatchFromContent', () => {
@@ -147,6 +170,102 @@ index 1234567..abcdef0 100644
     expect(left).toContain("const trailing = 'alice';");
     expect(left).not.toContain("const value = 'after';");
   });
+
+  it('still reverses an author edit when another author changed its hunk context', () => {
+    const left = revertPatchFromContent(`const heading = 'changed by another author';
+const value = 'after';
+const footer = 'stable';
+`, `diff --git a/src/example.ts b/src/example.ts
+index 1234567..abcdef0 100644
+--- a/src/example.ts
++++ b/src/example.ts
+@@ -1,3 +1,3 @@
+ const heading = 'base';
+-const value = 'before';
++const value = 'after';
+ const footer = 'stable';
+`);
+
+    expect(left).toBe(`const heading = 'changed by another author';
+const value = 'before';
+const footer = 'stable';
+`);
+  });
+
+  it('restores an author deletion using unchanged nearby context', () => {
+    const left = revertPatchFromContent(`const heading = 'changed by another author';
+const footer = 'stable';
+`, `diff --git a/src/example.ts b/src/example.ts
+index 1234567..abcdef0 100644
+--- a/src/example.ts
++++ b/src/example.ts
+@@ -1,3 +1,2 @@
+ const heading = 'base';
+-const removedByAuthor = true;
+ const footer = 'stable';
+`);
+
+    expect(left).toBe(`const heading = 'changed by another author';
+const removedByAuthor = true;
+const footer = 'stable';
+`);
+  });
+
+  it('keeps later non-author lines unhighlighted in files created by an author', () => {
+    const left = revertPatchFromContent(`export const authorLine = true;
+export const sharedLine = 'initial';
+export const laterAuthorLine = 'bob';
+`, `diff --git a/src/new.ts b/src/new.ts
+new file mode 100644
+--- /dev/null
++++ b/src/new.ts
+@@ -0,0 +1,2 @@
++export const authorLine = true;
++export const sharedLine = 'initial';
+`);
+
+    expect(left).toBe("export const laterAuthorLine = 'bob';\n");
+  });
+
+  it('keeps a later non-author insertion when it splits selected author additions', () => {
+    const left = revertPatchFromContent(`export const firstAuthorLine = true;
+export const insertedByBob = true;
+export const secondAuthorLine = true;
+`, `diff --git a/src/new.ts b/src/new.ts
+new file mode 100644
+--- /dev/null
++++ b/src/new.ts
+@@ -0,0 +1,2 @@
++export const firstAuthorLine = true;
++export const secondAuthorLine = true;
+`);
+
+    expect(left).toBe('export const insertedByBob = true;\n');
+  });
+
+  it('reports edits that were overwritten and cannot be highlighted safely', () => {
+    const result = revertPatchWithDiagnostics(`const heading = 'changed by another author';
+const value = 'replaced by another author';
+const footer = 'changed by another author';
+`, `diff --git a/src/example.ts b/src/example.ts
+index 1234567..abcdef0 100644
+--- a/src/example.ts
++++ b/src/example.ts
+@@ -1,3 +1,3 @@
+ const heading = 'base';
+-const value = 'before';
++const value = 'after';
+ const footer = 'stable';
+`);
+
+    expect(result).toEqual({
+      content: `const heading = 'changed by another author';
+const value = 'replaced by another author';
+const footer = 'changed by another author';
+`,
+      unmatchedBlocks: 1,
+    });
+  });
 });
 
 describe('applyOverallLineTotals', () => {
@@ -166,6 +285,26 @@ describe('applyOverallLineTotals', () => {
     const result = applyOverallLineTotals(authorFiles, branchFiles);
     expect(result).toMatchObject([{ source: 'author', additions: 1, deletions: 2 }]);
     expect(result[0].patch).toContain('+after');
+  });
+
+  it('uses the final renamed path while retaining the author-only patch', () => {
+    const authorFiles = parsePatch(`diff --git a/src/old.ts b/src/old.ts
+@@ -1 +1 @@
+-before
++after
+`, 'author');
+    const branchFiles = parsePatch(`diff --git a/src/old.ts b/src/new.ts
+similarity index 100%
+rename from src/old.ts
+rename to src/new.ts
+`, 'committed');
+
+    expect(applyOverallLineTotals(authorFiles, branchFiles)).toMatchObject([{
+      path: 'src/new.ts',
+      previousPath: 'src/old.ts',
+      status: 'renamed',
+      patch: expect.stringContaining('+after'),
+    }]);
   });
 });
 
@@ -240,5 +379,38 @@ describe('GitRepository author filtering', () => {
     expect(keywordChanges.files).toHaveLength(2);
     expect(keywordChanges.files.find((file) => file.path === 'src/bob.ts')).toMatchObject({ source: 'author' });
     expect(keywordChanges.activeAuthorKeyword).toBe('bob@example');
+  });
+
+  it('keeps a selected author path after a later rename by another author', async () => {
+    const repositoryPath = await mkdtemp(join(tmpdir(), 'branch-diff-explorer-rename-'));
+    temporaryDirectories.push(repositoryPath);
+    await runGit(repositoryPath, ['init', '--initial-branch=main']);
+    await runGit(repositoryPath, ['config', 'user.name', 'Alice']);
+    await runGit(repositoryPath, ['config', 'user.email', 'alice@example.test']);
+    await mkdir(join(repositoryPath, 'src'));
+    await writeFile(join(repositoryPath, 'src', 'old.ts'), 'one\ntwo\nthree\nfour\nfive\n');
+    await runGit(repositoryPath, ['add', '.']);
+    await runGit(repositoryPath, ['commit', '-m', 'base']);
+    await runGit(repositoryPath, ['checkout', '-b', 'feature']);
+    await writeFile(join(repositoryPath, 'src', 'old.ts'), 'one\ntwo updated\nthree\nfour\nfive\n');
+    await runGit(repositoryPath, ['add', '.']);
+    await runGit(repositoryPath, ['commit', '-m', 'Alice updates the file']);
+    await runGit(repositoryPath, ['config', 'user.name', 'Bob']);
+    await runGit(repositoryPath, ['config', 'user.email', 'bob@example.test']);
+    await runGit(repositoryPath, ['mv', 'src/old.ts', 'src/new.ts']);
+    await runGit(repositoryPath, ['commit', '-m', 'Bob renames the file']);
+
+    const snapshot = await new GitRepository(repositoryPath).snapshot({
+      baseBranch: 'main',
+      authorIds: [authorId('Alice', 'alice@example.test')],
+    });
+
+    expect(snapshot.files).toMatchObject([{
+      path: 'src/new.ts',
+      previousPath: 'src/old.ts',
+      source: 'author',
+      status: 'renamed',
+    }]);
+    expect(snapshot.files[0].patch).toContain('two updated');
   });
 });

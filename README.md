@@ -19,10 +19,14 @@ features.
   commit is selected, they open that commit's parent-to-commit diff instead.
 - When filtering by commit author, file diffs include only the matching authors'
   highlighted changes while keeping the rest of the current file visible.
+- Author highlights remain accurate when another commit changes surrounding
+  context, inserts into an author-created file, or renames the file later.
+  If an author edit has been overwritten or moved beyond safe matching, the
+  diff title calls that out instead of silently hiding it.
 - Author-filtered rows use final `base → working tree` line totals for each
   matching path, rather than adding up edits from every matching commit.
-- If a file does not exist on the selected base branch, it is shown as a full
-  addition in author-filtered diffs.
+- For a file absent from the base branch, the complete current file remains
+  visible, while only lines from the selected author are highlighted.
 - Go to Definition, Declaration, Type Definition, and Implementation from a
   virtual Git diff pane; the destination opens in the active workspace source.
 - Inspect one commit at a time.

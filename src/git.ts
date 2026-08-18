@@ -178,12 +178,12 @@ export function coalesceChangedFiles(files: ChangedFile[]): ChangedFile[] {
  * to the working tree for line counts and diff content.
  */
 export function applyOverallPatch(scopeFiles: ChangedFile[], overallFiles: ChangedFile[]): ChangedFile[] {
-  const scoped = new Map(scopeFiles.map((file) => [file.path, file]));
   return overallFiles.flatMap((overall) => {
-    const scope = scoped.get(overall.path);
+    const scope = matchingScopedFile(scopeFiles, overall);
     if (!scope) return [];
     return [{
       ...scope,
+      path: overall.path,
       previousPath: overall.previousPath ?? scope.previousPath,
       status: overall.status,
       additions: overall.additions,
@@ -196,12 +196,12 @@ export function applyOverallPatch(scopeFiles: ChangedFile[], overallFiles: Chang
 
 /** Keeps author-specific patch data while replacing only tree statistics with the branch diff. */
 export function applyOverallLineTotals(scopeFiles: ChangedFile[], overallFiles: ChangedFile[]): ChangedFile[] {
-  const scoped = new Map(scopeFiles.map((file) => [file.path, file]));
   return overallFiles.flatMap((overall) => {
-    const scope = scoped.get(overall.path);
+    const scope = matchingScopedFile(scopeFiles, overall);
     if (!scope) return [];
     return [{
       ...scope,
+      path: overall.path,
       previousPath: overall.previousPath ?? scope.previousPath,
       status: overall.status,
       additions: overall.additions,
@@ -210,10 +210,33 @@ export function applyOverallLineTotals(scopeFiles: ChangedFile[], overallFiles: 
   });
 }
 
+/**
+ * Git reports a final rename with both its old and new path. Match either one
+ * so an author's earlier edit remains visible after somebody renames the file.
+ */
+function matchingScopedFile(scopeFiles: ChangedFile[], overall: ChangedFile): ChangedFile | undefined {
+  const finalPaths = new Set([overall.path, overall.previousPath].filter((path): path is string => Boolean(path)));
+  return scopeFiles.find((file) => [file.path, file.previousPath].some((path) => path !== undefined && finalPaths.has(path)));
+}
+
 interface PatchHunk {
   newStart: number;
   oldLines: string[];
   newLines: string[];
+  entries: PatchEntry[];
+}
+
+interface PatchEntry {
+  kind: 'context' | 'deletion' | 'addition';
+  text: string;
+}
+
+interface PatchEditBlock {
+  newStart: number;
+  oldLines: string[];
+  newLines: string[];
+  beforeContext: string[];
+  afterContext: string[];
 }
 
 /**
@@ -221,17 +244,192 @@ interface PatchHunk {
  * identical on both sides of a side-by-side author-filtered diff.
  */
 export function revertPatchFromContent(content: string, patch: string): string {
+  return revertPatchWithDiagnostics(content, patch).content;
+}
+
+export interface PatchRevertResult {
+  content: string;
+  /** Edits that no longer occur in the current file, so they cannot be highlighted safely. */
+  unmatchedBlocks: number;
+}
+
+/**
+ * Produces the left side of an author-filtered diff and reports author edits
+ * that were overwritten or moved so far that no safe inverse can be found.
+ */
+export function revertPatchWithDiagnostics(content: string, patch: string): PatchRevertResult {
   const lines = content.split('\n');
+  const usesCarriageReturns = lines.some((line) => line.endsWith('\r'));
+  let unmatchedBlocks = 0;
   const chunks = patch.split(/^diff --git /m).filter(Boolean).map((chunk) => `diff --git ${chunk}`);
   for (const chunk of chunks) {
     const hunks = patchHunks(chunk);
     for (const hunk of hunks.reverse()) {
-      const index = findHunk(lines, hunk.newLines, hunk.newStart - 1);
-      if (index === undefined) continue;
-      lines.splice(index, hunk.newLines.length, ...hunk.oldLines);
+      if (revertExactHunk(lines, hunk, usesCarriageReturns)) continue;
+      // A later commit often changes only the hunk's context. Revert each
+      // actual author edit using nearby context as a soft anchor instead of
+      // silently losing the highlight when that context no longer matches.
+      for (const block of patchEditBlocks(hunk).reverse()) {
+        if (!revertFuzzyBlock(lines, block, usesCarriageReturns).complete) unmatchedBlocks += 1;
+      }
     }
   }
-  return lines.join('\n');
+  return { content: lines.join('\n'), unmatchedBlocks };
+}
+
+function revertExactHunk(lines: string[], hunk: PatchHunk, usesCarriageReturns: boolean): boolean {
+  const index = findLineSequence(lines, hunk.newLines, hunk.newStart - 1);
+  if (index === undefined) return false;
+  lines.splice(index, hunk.newLines.length, ...withLineEnding(hunk.oldLines, usesCarriageReturns));
+  return true;
+}
+
+interface RevertBlockResult {
+  complete: boolean;
+}
+
+function revertFuzzyBlock(lines: string[], block: PatchEditBlock, usesCarriageReturns: boolean): RevertBlockResult {
+  const index = findFuzzyPlacement(lines, block);
+  if (index !== undefined) {
+    lines.splice(index, block.newLines.length, ...withLineEnding(block.oldLines, usesCarriageReturns));
+    return { complete: true };
+  }
+  // A selected author can create several adjacent lines and another author
+  // can later insert between them. Treat those additions independently so
+  // the surviving selected lines still receive their diff highlight.
+  if (!block.oldLines.length && block.newLines.length > 1) {
+    const positions = separatedAdditionPositions(lines, block);
+    for (const position of [...positions].reverse()) lines.splice(position, 1);
+    return { complete: positions.length === block.newLines.length };
+  }
+  return { complete: false };
+}
+
+function patchEditBlocks(hunk: PatchHunk): PatchEditBlock[] {
+  const blocks: PatchEditBlock[] = [];
+  const context: string[] = [];
+  let newOffset = 0;
+  let active: PatchEditBlock | undefined;
+
+  for (let index = 0; index < hunk.entries.length; index += 1) {
+    const entry = hunk.entries[index];
+    if (entry.kind === 'context') {
+      if (active) {
+        active.afterContext = contiguousContextAfter(hunk.entries, index);
+        blocks.push(active);
+        active = undefined;
+      }
+      context.push(entry.text);
+      newOffset += 1;
+      continue;
+    }
+    if (!active) {
+      active = {
+        newStart: hunk.newStart + newOffset,
+        oldLines: [],
+        newLines: [],
+        beforeContext: context.slice(-3),
+        afterContext: [],
+      };
+    }
+    if (entry.kind === 'deletion') {
+      active.oldLines.push(entry.text);
+    } else {
+      active.newLines.push(entry.text);
+      newOffset += 1;
+    }
+  }
+  if (active) blocks.push(active);
+  return blocks;
+}
+
+function contiguousContextAfter(entries: PatchEntry[], start: number): string[] {
+  const result: string[] = [];
+  for (let index = start; index < entries.length && result.length < 3; index += 1) {
+    const entry = entries[index];
+    if (entry.kind !== 'context') break;
+    result.push(entry.text);
+  }
+  return result;
+}
+
+function findFuzzyPlacement(lines: string[], block: PatchEditBlock): number | undefined {
+  const preferredIndex = block.newStart - 1;
+  const candidates = block.newLines.length
+    ? sequencePositions(lines, block.newLines)
+    : anchorPositions(lines, block.beforeContext, block.afterContext);
+  if (!candidates.length) return undefined;
+  let result: number | undefined;
+  let score = Number.NEGATIVE_INFINITY;
+  for (const candidate of candidates) {
+    const candidateScore = fuzzyPlacementScore(lines, candidate, block);
+    if (candidateScore > score) {
+      result = candidate;
+      score = candidateScore;
+    }
+  }
+  return result;
+}
+
+function separatedAdditionPositions(lines: string[], block: PatchEditBlock): number[] {
+  const positions: number[] = [];
+  let minimumIndex = 0;
+  for (let offset = 0; offset < block.newLines.length; offset += 1) {
+    const individual: PatchEditBlock = {
+      ...block,
+      newStart: block.newStart + offset,
+      newLines: [block.newLines[offset]],
+      beforeContext: offset === 0 ? block.beforeContext : [],
+      afterContext: offset === block.newLines.length - 1 ? block.afterContext : [],
+    };
+    const candidates = sequencePositions(lines, individual.newLines).filter((index) => index >= minimumIndex);
+    if (!candidates.length) continue;
+    const position = candidates.reduce((best, candidate) => {
+      return fuzzyPlacementScore(lines, candidate, individual) > fuzzyPlacementScore(lines, best, individual)
+        ? candidate
+        : best;
+    });
+    positions.push(position);
+    minimumIndex = position + 1;
+  }
+  return positions;
+}
+
+function fuzzyPlacementScore(lines: string[], candidate: number, block: PatchEditBlock): number {
+  const beforeMatches = contextBeforeMatches(lines, candidate, block.beforeContext);
+  const afterMatches = contextAfterMatches(lines, candidate + block.newLines.length, block.afterContext);
+  // A matching changed sequence is the main signal; exact adjacent context
+  // resolves repeated snippets and offsets introduced by other commits.
+  return beforeMatches * 1000 + afterMatches * 1000 - Math.abs(candidate - (block.newStart - 1));
+}
+
+function anchorPositions(lines: string[], before: string[], after: string[]): number[] {
+  const positions = new Set<number>();
+  for (const index of sequencePositions(lines, before)) positions.add(index + before.length);
+  for (const index of sequencePositions(lines, after)) positions.add(index);
+  return [...positions];
+}
+
+function contextBeforeMatches(lines: string[], index: number, context: string[]): number {
+  let matched = 0;
+  for (let offset = 1; offset <= context.length && index - offset >= 0; offset += 1) {
+    if (!sameLine(lines[index - offset], context[context.length - offset])) break;
+    matched += 1;
+  }
+  return matched;
+}
+
+function contextAfterMatches(lines: string[], index: number, context: string[]): number {
+  let matched = 0;
+  for (let offset = 0; offset < context.length && index + offset < lines.length; offset += 1) {
+    if (!sameLine(lines[index + offset], context[offset])) break;
+    matched += 1;
+  }
+  return matched;
+}
+
+function withLineEnding(lines: string[], usesCarriageReturns: boolean): string[] {
+  return usesCarriageReturns ? lines.map((line) => line.endsWith('\r') ? line : `${line}\r`) : lines;
 }
 
 function patchHunks(patch: string): PatchHunk[] {
@@ -240,37 +438,46 @@ function patchHunks(patch: string): PatchHunk[] {
   for (const row of patch.split('\n')) {
     const header = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(row);
     if (header) {
-      current = { newStart: Number(header[1]), oldLines: [], newLines: [] };
+      current = { newStart: Number(header[1]), oldLines: [], newLines: [], entries: [] };
       hunks.push(current);
       continue;
     }
     if (!current || row.startsWith('\\')) continue;
     if (row.startsWith(' ')) {
-      current.oldLines.push(row.slice(1));
-      current.newLines.push(row.slice(1));
+      const text = row.slice(1);
+      current.oldLines.push(text);
+      current.newLines.push(text);
+      current.entries.push({ kind: 'context', text });
     } else if (row.startsWith('-') && !row.startsWith('---')) {
-      current.oldLines.push(row.slice(1));
+      const text = row.slice(1);
+      current.oldLines.push(text);
+      current.entries.push({ kind: 'deletion', text });
     } else if (row.startsWith('+') && !row.startsWith('+++')) {
-      current.newLines.push(row.slice(1));
+      const text = row.slice(1);
+      current.newLines.push(text);
+      current.entries.push({ kind: 'addition', text });
     }
   }
   return hunks;
 }
 
-function findHunk(lines: string[], expected: string[], preferredIndex: number): number | undefined {
+function findLineSequence(lines: string[], expected: string[], preferredIndex: number): number | undefined {
   if (!expected.length) return Math.max(0, Math.min(preferredIndex, lines.length));
-  let match: number | undefined;
-  let distance = Number.POSITIVE_INFINITY;
+  const positions = sequencePositions(lines, expected);
+  return positions.sort((left, right) => Math.abs(left - preferredIndex) - Math.abs(right - preferredIndex))[0];
+}
+
+function sequencePositions(lines: string[], expected: string[]): number[] {
+  if (!expected.length) return [];
+  const positions: number[] = [];
   for (let index = 0; index <= lines.length - expected.length; index += 1) {
-    if (!expected.every((line, offset) => lines[index + offset] === line)) continue;
-    const candidateDistance = Math.abs(index - preferredIndex);
-    if (candidateDistance < distance) {
-      match = index;
-      distance = candidateDistance;
-      if (!distance) break;
-    }
+    if (expected.every((line, offset) => sameLine(lines[index + offset], line))) positions.push(index);
   }
-  return match;
+  return positions;
+}
+
+function sameLine(left: string, right: string): boolean {
+  return left === right || left.replace(/\r$/, '') === right.replace(/\r$/, '');
 }
 
 function sourcePriority(source: ChangeSource): number {
@@ -324,15 +531,6 @@ export class GitRepository {
 
   async contentAt(ref: string, path: string): Promise<string> {
     return this.run(['show', `${ref}:${path}`]);
-  }
-
-  async hasContentAt(ref: string, path: string): Promise<boolean> {
-    try {
-      await this.run(['cat-file', '-e', `${ref}:${path}`]);
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   async branches(): Promise<string[]> {
