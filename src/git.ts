@@ -194,42 +194,67 @@ export function applyOverallPatch(scopeFiles: ChangedFile[], overallFiles: Chang
   });
 }
 
-/** Builds two source-only views from selected-commit patch hunks for a diff editor. */
-export function authorPatchSides(patch: string): { left: string; right: string } {
-  const left: string[] = [];
-  const right: string[] = [];
-  let insideHunk = false;
-  let hunkCount = 0;
+interface PatchHunk {
+  newStart: number;
+  oldLines: string[];
+  newLines: string[];
+}
 
-  for (const row of patch.split('\n')) {
-    if (row.startsWith('diff --git ')) {
-      insideHunk = false;
-      continue;
-    }
-    if (row.startsWith('@@ ')) {
-      if (hunkCount > 0) {
-        left.push('');
-        right.push('');
-      }
-      left.push(row);
-      right.push(row);
-      hunkCount += 1;
-      insideHunk = true;
-      continue;
-    }
-    if (!insideHunk || row.startsWith('\\')) continue;
-    if (row.startsWith(' ') || !row) {
-      const value = row.startsWith(' ') ? row.slice(1) : row;
-      left.push(value);
-      right.push(value);
-    } else if (row.startsWith('-') && !row.startsWith('---')) {
-      left.push(row.slice(1));
-    } else if (row.startsWith('+') && !row.startsWith('+++')) {
-      right.push(row.slice(1));
+/**
+ * Reverts selected commits from a full file, leaving all non-selected changes
+ * identical on both sides of a side-by-side author-filtered diff.
+ */
+export function revertPatchFromContent(content: string, patch: string): string {
+  const lines = content.split('\n');
+  const chunks = patch.split(/^diff --git /m).filter(Boolean).map((chunk) => `diff --git ${chunk}`);
+  for (const chunk of chunks) {
+    const hunks = patchHunks(chunk);
+    for (const hunk of hunks.reverse()) {
+      const index = findHunk(lines, hunk.newLines, hunk.newStart - 1);
+      if (index === undefined) continue;
+      lines.splice(index, hunk.newLines.length, ...hunk.oldLines);
     }
   }
+  return lines.join('\n');
+}
 
-  return { left: left.join('\n'), right: right.join('\n') };
+function patchHunks(patch: string): PatchHunk[] {
+  const hunks: PatchHunk[] = [];
+  let current: PatchHunk | undefined;
+  for (const row of patch.split('\n')) {
+    const header = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(row);
+    if (header) {
+      current = { newStart: Number(header[1]), oldLines: [], newLines: [] };
+      hunks.push(current);
+      continue;
+    }
+    if (!current || row.startsWith('\\')) continue;
+    if (row.startsWith(' ')) {
+      current.oldLines.push(row.slice(1));
+      current.newLines.push(row.slice(1));
+    } else if (row.startsWith('-') && !row.startsWith('---')) {
+      current.oldLines.push(row.slice(1));
+    } else if (row.startsWith('+') && !row.startsWith('+++')) {
+      current.newLines.push(row.slice(1));
+    }
+  }
+  return hunks;
+}
+
+function findHunk(lines: string[], expected: string[], preferredIndex: number): number | undefined {
+  if (!expected.length) return Math.max(0, Math.min(preferredIndex, lines.length));
+  let match: number | undefined;
+  let distance = Number.POSITIVE_INFINITY;
+  for (let index = 0; index <= lines.length - expected.length; index += 1) {
+    if (!expected.every((line, offset) => lines[index + offset] === line)) continue;
+    const candidateDistance = Math.abs(index - preferredIndex);
+    if (candidateDistance < distance) {
+      match = index;
+      distance = candidateDistance;
+      if (!distance) break;
+    }
+  }
+  return match;
 }
 
 function sourcePriority(source: ChangeSource): number {

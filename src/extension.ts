@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
-import { authorPatchSides, GitRepository, type GitRunOptions } from './git';
+import { GitRepository, revertPatchFromContent, type GitRunOptions } from './git';
 import { createWebviewHtml } from './webview';
 import type { ChangedFile, DiffSnapshot, FindingSeverity, SnapshotRequest } from './types';
 
@@ -430,9 +430,9 @@ class ExplorerController implements vscode.Disposable {
     const leftTarget = vscode.Uri.file(resolve(snapshot.repository.path, leftPath));
     const rightTarget = vscode.Uri.file(resolve(snapshot.repository.path, file.path));
     if (source === 'author') {
-      const sides = authorPatchSides(file.patch);
-      const left = this.content.put(sides.left, leftTarget);
-      const right = this.content.put(sides.right, rightTarget);
+      const rightContent = await this.currentContentOrEmpty(rightTarget);
+      const left = this.content.put(revertPatchFromContent(rightContent, file.patch), leftTarget);
+      const right = this.content.put(rightContent, rightTarget);
       await vscode.commands.executeCommand('vscode.diff', left, right, `${file.path} (author changes)`, { preview: true });
       return;
     }
@@ -538,6 +538,14 @@ class ExplorerController implements vscode.Disposable {
     } catch {
       // Deleted files need an empty right side instead of their HEAD contents.
       return this.content.put('', target);
+    }
+  }
+
+  private async currentContentOrEmpty(target: vscode.Uri): Promise<string> {
+    try {
+      return Buffer.from(await vscode.workspace.fs.readFile(target)).toString('utf8');
+    } catch {
+      return '';
     }
   }
 

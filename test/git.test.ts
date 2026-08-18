@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { applyOverallPatch, authorId, authorPatchSides, coalesceChangedFiles, DEFAULT_GIT_MAX_OUTPUT_BYTES, GitRepository, parsePatch, runGit } from '../src/git';
+import { applyOverallPatch, authorId, coalesceChangedFiles, DEFAULT_GIT_MAX_OUTPUT_BYTES, GitRepository, parsePatch, revertPatchFromContent, runGit } from '../src/git';
 
 const temporaryDirectories: string[] = [];
 
@@ -126,23 +126,26 @@ index 1234567..fedcba0 100644
   });
 });
 
-describe('authorPatchSides', () => {
-  it('keeps only selected-commit hunk changes in the two diff panes', () => {
-    const sides = authorPatchSides(`diff --git a/src/example.ts b/src/example.ts
+describe('revertPatchFromContent', () => {
+  it('keeps non-author content while reverting only the selected author patch', () => {
+    const left = revertPatchFromContent(`const untouched = 'alice';
+const value = 'after';
+const trailing = 'alice';
+`, `diff --git a/src/example.ts b/src/example.ts
 index 1234567..abcdef0 100644
 --- a/src/example.ts
 +++ b/src/example.ts
 @@ -1,2 +1,2 @@
- unchanged
--before
-+after
+ const untouched = 'alice';
+-const value = 'before';
++const value = 'after';
+ const trailing = 'alice';
 `);
 
-    expect(sides.left).toContain('before');
-    expect(sides.left).not.toContain('after');
-    expect(sides.right).toContain('after');
-    expect(sides.right).not.toContain('before');
-    expect(sides.left).not.toContain('diff --git');
+    expect(left).toContain("const value = 'before';");
+    expect(left).toContain("const untouched = 'alice';");
+    expect(left).toContain("const trailing = 'alice';");
+    expect(left).not.toContain("const value = 'after';");
   });
 });
 
@@ -203,7 +206,7 @@ describe('GitRepository author filtering', () => {
     });
     expect(bobChanges.files).toHaveLength(1);
     expect(bobChanges.files[0]).toMatchObject({ path: 'src/bob.ts', source: 'author', sources: ['author'], commitHash: bobUpdateHash, additions: 2, deletions: 1 });
-    expect(authorPatchSides(bobChanges.files[0].patch).right).not.toContain('alice follow-up');
+    expect(bobChanges.files[0].patch).not.toContain('alice follow-up');
     expect(bobChanges.notice).toContain('Uncommitted work is excluded');
 
     const keywordChanges = await repository.snapshot({ baseBranch: 'main', authorKeyword: 'bob@example' });
