@@ -55,16 +55,25 @@ interface ViewMessage {
 }
 
 class VirtualGitContent implements vscode.TextDocumentContentProvider {
-  private readonly contents = new Map<string, string>();
+  private readonly contents = new Map<string, { value: string; target: vscode.Uri }>();
 
-  put(value: string): vscode.Uri {
+  put(value: string, target: vscode.Uri): vscode.Uri {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    this.contents.set(id, value);
-    return vscode.Uri.parse(`${CONTENT_SCHEME}:/${id}.txt`);
+    this.contents.set(id, { value, target });
+    // Keep the source file extension so syntax highlighting works in both diff panes.
+    return vscode.Uri.from({ scheme: CONTENT_SCHEME, path: `/${id}/${basename(target.path) || 'content.txt'}` });
   }
 
   provideTextDocumentContent(uri: vscode.Uri): string {
-    return this.contents.get(uri.path.slice(1).replace(/\.txt$/, '')) ?? '';
+    return this.contents.get(this.id(uri))?.value ?? '';
+  }
+
+  target(uri: vscode.Uri): vscode.Uri | undefined {
+    return this.contents.get(this.id(uri))?.target;
+  }
+
+  private id(uri: vscode.Uri): string {
+    return uri.path.split('/')[1] ?? '';
   }
 }
 
@@ -227,6 +236,18 @@ class ExplorerController implements vscode.Disposable {
     };
     this.disposables.push(
       vscode.workspace.registerTextDocumentContentProvider(CONTENT_SCHEME, this.content),
+      vscode.languages.registerDefinitionProvider({ scheme: CONTENT_SCHEME }, {
+        provideDefinition: (document, position) => this.forwardNavigation('vscode.executeDefinitionProvider', document, position),
+      }),
+      vscode.languages.registerDeclarationProvider({ scheme: CONTENT_SCHEME }, {
+        provideDeclaration: (document, position) => this.forwardNavigation('vscode.executeDeclarationProvider', document, position),
+      }),
+      vscode.languages.registerTypeDefinitionProvider({ scheme: CONTENT_SCHEME }, {
+        provideTypeDefinition: (document, position) => this.forwardNavigation('vscode.executeTypeDefinitionProvider', document, position),
+      }),
+      vscode.languages.registerImplementationProvider({ scheme: CONTENT_SCHEME }, {
+        provideImplementation: (document, position) => this.forwardNavigation('vscode.executeImplementationProvider', document, position),
+      }),
       vscode.window.registerWebviewViewProvider('branchDiffExplorer.view', this.sidebar),
       vscode.commands.registerCommand('branchDiffExplorer.open', () => this.sidebar.show()),
       vscode.commands.registerCommand('branchDiffExplorer.openPanel', () => this.openPanel()),
@@ -412,10 +433,13 @@ class ExplorerController implements vscode.Disposable {
       : source === 'committed' || source === 'author' || source === 'commit'
         ? 'HEAD'
         : ':';
-    const left = this.content.put(await this.contentForRef(repository, leftRef, file.previousPath ?? file.path));
+    const leftPath = file.previousPath ?? file.path;
+    const leftTarget = vscode.Uri.file(resolve(snapshot.repository.path, leftPath));
+    const rightTarget = vscode.Uri.file(resolve(snapshot.repository.path, file.path));
+    const left = this.content.put(await this.contentForRef(repository, leftRef, leftPath), leftTarget);
     const right = source === 'unstaged'
-      ? vscode.Uri.file(vscode.Uri.joinPath(vscode.Uri.file(snapshot.repository.path), file.path).fsPath)
-      : this.content.put(await this.contentForRef(repository, rightRef, file.path));
+      ? rightTarget
+      : this.content.put(await this.contentForRef(repository, rightRef, file.path), rightTarget);
     const title = revision ? `${file.path} (${revision.slice(0, 8)})` : `${file.path} (${source})`;
     await vscode.commands.executeCommand('vscode.diff', left, right, title, { preview: true });
   }
@@ -486,6 +510,21 @@ class ExplorerController implements vscode.Disposable {
     } catch {
       // New/deleted files have no content on one side of a diff.
       return '';
+    }
+  }
+
+  private async forwardNavigation(
+    command: string,
+    document: vscode.TextDocument,
+    position: vscode.Position,
+  ): Promise<vscode.Definition | undefined> {
+    const target = this.content.target(document.uri);
+    if (!target) return undefined;
+    try {
+      return await vscode.commands.executeCommand<vscode.Definition>(command, target, position);
+    } catch {
+      // Historical or deleted paths may not exist in the active workspace.
+      return undefined;
     }
   }
 
