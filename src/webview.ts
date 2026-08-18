@@ -75,6 +75,7 @@ export function createWebviewHtml(webview: vscode.Webview): string {
     .minus { color: var(--vscode-gitDecoration-deletedResourceForeground, #f14c4c); }
     .empty { color: var(--vscode-descriptionForeground); padding: 26px 18px; line-height: 1.45; text-align: center; }
     .error { background: var(--vscode-inputValidation-errorBackground); border: 1px solid var(--vscode-inputValidation-errorBorder); color: var(--vscode-inputValidation-errorForeground); margin: 10px; padding: 8px; }
+    .error button { margin-top: 8px; }
     .loading { color: var(--vscode-descriptionForeground); font-size: 11px; }
     .review { border-top: 1px solid var(--vscode-sideBar-border, var(--vscode-panel-border)); margin-top: 5px; padding: 8px 10px; }
     .review-heading { font-size: 11px; font-weight: 700; margin-bottom: 6px; }
@@ -267,7 +268,15 @@ export function createWebviewHtml(webview: vscode.Webview): string {
 
     function render() {
       app.replaceChildren();
-      if (model.error) { app.append(element('div', 'error', model.error)); return; }
+      if (model.error) {
+        const error = element('div', 'error');
+        error.append(element('div', '', model.error));
+        const settings = element('button', '', 'Open Settings');
+        settings.addEventListener('click', () => vscode.postMessage({ type: 'openSettings' }));
+        error.append(settings);
+        app.append(error);
+        return;
+      }
       const snapshot = model.snapshot;
       if (!snapshot) { app.append(element('div', 'empty', model.loading ? 'Loading local Git changes…' : 'No Git data available.')); return; }
 

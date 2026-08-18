@@ -2,7 +2,7 @@
   "name": "branch-diff-explorer",
   "displayName": "Branch Diff Explorer",
   "description": "Search and review only the changes in your Git branch.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "local",
   "license": "MIT",
   "repository": {
@@ -61,6 +61,10 @@
       {
         "command": "branchDiffExplorer.refresh",
         "title": "Branch Diff Explorer: Refresh"
+      },
+      {
+        "command": "branchDiffExplorer.openSettings",
+        "title": "Branch Diff Explorer: Open Settings"
       }
     ],
     "keybindings": [
@@ -89,6 +93,22 @@
           "minimum": 100,
           "maximum": 20000,
           "description": "Maximum changed lines sent to the Branch Diff Explorer view."
+        },
+        "branchDiffExplorer.gitMaxOutputBufferMB": {
+          "type": "number",
+          "default": 256,
+          "minimum": 16,
+          "maximum": 4096,
+          "scope": "resource",
+          "description": "Maximum output buffer, in MB, available to each Git command. Increase this when a large branch diff exceeds the output buffer."
+        },
+        "branchDiffExplorer.gitCommandTimeoutMs": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 600000,
+          "scope": "resource",
+          "description": "Time limit, in milliseconds, for a Git command. Use 0 to allow the command to run without a time limit."
         }
       }
     },

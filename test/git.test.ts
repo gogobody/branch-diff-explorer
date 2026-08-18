@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { authorId, GitRepository, parsePatch, runGit } from '../src/git';
+import { authorId, DEFAULT_GIT_MAX_OUTPUT_BYTES, GitRepository, parsePatch, runGit } from '../src/git';
 
 const temporaryDirectories: string[] = [];
 
@@ -55,6 +55,16 @@ rename to to.ts
       ['deleted', 'old.ts', undefined],
       ['renamed', 'to.ts', 'from.ts'],
     ]);
+  });
+});
+
+describe('Git output options', () => {
+  it('keeps a large default buffer and accepts an override', async () => {
+    expect(DEFAULT_GIT_MAX_OUTPUT_BYTES).toBe(256 * 1024 * 1024);
+    const repositoryPath = await mkdtemp(join(tmpdir(), 'branch-diff-explorer-options-'));
+    temporaryDirectories.push(repositoryPath);
+    await runGit(repositoryPath, ['init', '--initial-branch=main'], { maxBuffer: 16 * 1024 * 1024, timeout: 10000 });
+    expect(await new GitRepository(repositoryPath, { maxBuffer: 16 * 1024 * 1024, timeout: 10000 }).branch()).toBe('main');
   });
 });
 

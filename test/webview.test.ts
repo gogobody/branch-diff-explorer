@@ -19,5 +19,6 @@ describe('Branch Diff Explorer webview', () => {
     expect(html).toContain('Copy absolute path');
     expect(html).toContain('Reveal in file manager');
     expect(html).toContain('summary-totals');
+    expect(html).toContain('Open Settings');
   });
 });

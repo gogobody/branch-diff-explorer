@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
-import { GitRepository, runGit } from './git';
+import { GitRepository, type GitRunOptions } from './git';
 import { createWebviewHtml } from './webview';
 import type { ChangedFile, DiffSnapshot, FindingSeverity, SnapshotRequest } from './types';
 
@@ -42,7 +42,7 @@ interface ExplorerViewState {
 }
 
 interface ViewMessage {
-  type: 'ready' | 'refresh' | 'switchSession' | 'createSession' | 'renameSession' | 'deleteSession' | 'saveSession' | 'openFile' | 'openPanel' | 'openPath' | 'copyPath' | 'revealPath' | 'toggleFavorite' | 'toggleReviewed' | 'triage' | 'info';
+  type: 'ready' | 'refresh' | 'switchSession' | 'createSession' | 'renameSession' | 'deleteSession' | 'saveSession' | 'openFile' | 'openPanel' | 'openSettings' | 'openPath' | 'copyPath' | 'revealPath' | 'toggleFavorite' | 'toggleReviewed' | 'triage' | 'info';
   request?: ViewRequest;
   sessionId?: string;
   ui?: SessionUiConfig;
@@ -96,7 +96,9 @@ class ExplorerWebview implements vscode.Disposable {
         sessions: state.sessions,
       });
     } catch (error) {
-      await this.webview.postMessage({ type: 'error', message: errorMessage(error) });
+      const message = errorMessage(error);
+      await this.webview.postMessage({ type: 'error', message });
+      void this.controller.showError(message);
     }
   }
 
@@ -136,6 +138,9 @@ class ExplorerWebview implements vscode.Disposable {
         return;
       case 'openPanel':
         await this.controller.openPanel(this.request);
+        return;
+      case 'openSettings':
+        await this.controller.openSettings();
         return;
       case 'openPath':
         if (message.path) await this.controller.openPath(this.snapshot?.repository.path, message.path, message.line);
@@ -226,6 +231,7 @@ class ExplorerController implements vscode.Disposable {
       vscode.commands.registerCommand('branchDiffExplorer.open', () => this.sidebar.show()),
       vscode.commands.registerCommand('branchDiffExplorer.openPanel', () => this.openPanel()),
       vscode.commands.registerCommand('branchDiffExplorer.refresh', () => this.refreshAll()),
+      vscode.commands.registerCommand('branchDiffExplorer.openSettings', () => this.openSettings()),
       vscode.workspace.onDidSaveTextDocument(() => this.scheduleRefresh()),
       vscode.workspace.onDidChangeWorkspaceFolders(() => this.scheduleRefresh()),
       gitWatcher,
@@ -252,8 +258,9 @@ class ExplorerController implements vscode.Disposable {
     const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
     const roots = new Set<string>();
     for (const folder of workspaceFolders) {
-      if (await GitRepository.isRepository(folder.uri.fsPath)) {
-        roots.add((await runGit(folder.uri.fsPath, ['rev-parse', '--show-toplevel'])).trim());
+      const options = this.gitRunOptions(folder.uri);
+      if (await GitRepository.isRepository(folder.uri.fsPath, options)) {
+        roots.add(await new GitRepository(folder.uri.fsPath, options).root());
       }
     }
     return [...roots].sort().map((path) => ({ path, name: vscode.workspace.asRelativePath(path, false) || path.split(/[\\/]/).pop() || path }));
@@ -281,7 +288,11 @@ class ExplorerController implements vscode.Disposable {
     const maxLines = configuration.get<number>('maxChangedLines', 4000);
     const storedBase = this.context.workspaceState.get<string>(`branchDiffExplorer.base:${selected.path}`);
     const gitRequest = { ...effectiveRequest, baseBranch: effectiveRequest.baseBranch || storedBase };
-    const result = await new GitRepository(selected.path).snapshot(gitRequest, configuration.get<string>('defaultBaseBranch'), maxLines);
+    const result = await new GitRepository(selected.path, this.gitRunOptions(vscode.Uri.file(selected.path))).snapshot(
+      gitRequest,
+      configuration.get<string>('defaultBaseBranch'),
+      maxLines,
+    );
     if (effectiveRequest.baseBranch && effectiveRequest.baseBranch === result.repository.baseBranch) {
       await this.context.workspaceState.update(`branchDiffExplorer.base:${selected.path}`, effectiveRequest.baseBranch);
     }
@@ -393,7 +404,7 @@ class ExplorerController implements vscode.Disposable {
       return;
     }
 
-    const repository = new GitRepository(snapshot.repository.path);
+    const repository = new GitRepository(snapshot.repository.path, this.gitRunOptions(vscode.Uri.file(snapshot.repository.path)));
     const leftRef = source === 'committed' ? snapshot.repository.baseBranch : source === 'staged' ? 'HEAD' : ':';
     const rightRef = source === 'committed' ? 'HEAD' : ':';
     const left = this.content.put(await this.contentForRef(repository, leftRef, file.previousPath ?? file.path));
@@ -455,9 +466,18 @@ class ExplorerController implements vscode.Disposable {
     await this.context.workspaceState.update(key, next);
   }
 
+  async openSettings(): Promise<void> {
+    await vscode.commands.executeCommand('workbench.action.openSettings', 'branchDiffExplorer');
+  }
+
+  async showError(message: string): Promise<void> {
+    const action = await vscode.window.showErrorMessage(`Branch Diff Explorer: ${message}`, 'Open Settings');
+    if (action === 'Open Settings') await this.openSettings();
+  }
+
   private async contentForRef(repository: GitRepository, ref: string, path: string): Promise<string> {
     try {
-      return await runGit(repository.rootPath, ['show', `${ref}:${path}`]);
+      return await repository.contentAt(ref, path);
     } catch {
       // New/deleted files have no content on one side of a diff.
       return '';
@@ -473,6 +493,18 @@ class ExplorerController implements vscode.Disposable {
 
   private stateKey(snapshot: DiffSnapshot): string {
     return `branchDiffExplorer.state:${snapshot.repository.path}:${snapshot.repository.branch}`;
+  }
+
+  private gitRunOptions(resource: vscode.Uri): GitRunOptions {
+    const configuration = vscode.workspace.getConfiguration('branchDiffExplorer', resource);
+    const configuredMegabytes = configuration.get<number>('gitMaxOutputBufferMB', 256);
+    const configuredTimeout = configuration.get<number>('gitCommandTimeoutMs', 0);
+    const maxMegabytes = clamp(configuredMegabytes, 16, 4096, 256);
+    const timeout = clamp(configuredTimeout, 0, 600000, 0);
+    return {
+      maxBuffer: maxMegabytes * 1024 * 1024,
+      timeout: timeout || undefined,
+    };
   }
 
   private sessions(): ExplorerSession[] {
@@ -528,7 +560,15 @@ class ExplorerController implements vscode.Disposable {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : String(error);
+  return /maxBuffer|stdout maxBuffer/i.test(message)
+    ? `${message} Increase “Git max output buffer (MB)” in Branch Diff Explorer settings, then refresh.`
+    : message;
+}
+
+function clamp(value: number, minimum: number, maximum: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(maximum, Math.max(minimum, Math.floor(value)));
 }
 
 export function activate(context: vscode.ExtensionContext): void {

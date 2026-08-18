@@ -18,7 +18,12 @@ const RECORD_SEPARATOR = '\u001e';
 const FIELD_SEPARATOR = '\u001f';
 // Branch-wide patches can be substantially larger than Node's small default
 // stdout buffer. The webview still caps line previews separately.
-const GIT_MAX_OUTPUT_BYTES = 256 * 1024 * 1024;
+export const DEFAULT_GIT_MAX_OUTPUT_BYTES = 256 * 1024 * 1024;
+
+export interface GitRunOptions {
+  maxBuffer?: number;
+  timeout?: number;
+}
 
 export class GitError extends Error {
   constructor(message: string) {
@@ -27,12 +32,13 @@ export class GitError extends Error {
   }
 }
 
-export async function runGit(cwd: string, args: string[]): Promise<string> {
+export async function runGit(cwd: string, args: string[], options: GitRunOptions = {}): Promise<string> {
   try {
     const { stdout } = await execFileAsync('git', args, {
       cwd,
       encoding: 'utf8',
-      maxBuffer: GIT_MAX_OUTPUT_BYTES,
+      maxBuffer: options.maxBuffer ?? DEFAULT_GIT_MAX_OUTPUT_BYTES,
+      timeout: options.timeout ?? 0,
       windowsHide: true,
     });
     return stdout;
@@ -162,30 +168,38 @@ function collectAuthors(commits: CommitRecord[]): CommitAuthor[] {
 }
 
 export class GitRepository {
-  constructor(readonly rootPath: string) {}
+  constructor(readonly rootPath: string, private readonly options: GitRunOptions = {}) {}
 
-  static async isRepository(path: string): Promise<boolean> {
+  static async isRepository(path: string, options?: GitRunOptions): Promise<boolean> {
     try {
-      return (await runGit(path, ['rev-parse', '--is-inside-work-tree'])).trim() === 'true';
+      return (await runGit(path, ['rev-parse', '--is-inside-work-tree'], options)).trim() === 'true';
     } catch {
       return false;
     }
   }
 
   async branch(): Promise<string> {
-    const branch = (await runGit(this.rootPath, ['branch', '--show-current'])).trim();
+    const branch = (await this.run(['branch', '--show-current'])).trim();
     return branch || 'HEAD (detached)';
   }
 
+  async root(): Promise<string> {
+    return (await this.run(['rev-parse', '--show-toplevel'])).trim();
+  }
+
+  async contentAt(ref: string, path: string): Promise<string> {
+    return this.run(['show', `${ref}:${path}`]);
+  }
+
   async branches(): Promise<string[]> {
-    const output = await runGit(this.rootPath, ['for-each-ref', '--format=%(refname:short)', 'refs/heads', 'refs/remotes']);
+    const output = await this.run(['for-each-ref', '--format=%(refname:short)', 'refs/heads', 'refs/remotes']);
     return [...new Set(output.split('\n').map((branch) => branch.trim()).filter((branch) => branch && !branch.endsWith('/HEAD')))];
   }
 
   async chooseBase(configuredBase?: string): Promise<string> {
     if (configuredBase?.trim() && await this.refExists(configuredBase.trim())) return configuredBase.trim();
     try {
-      const remoteHead = (await runGit(this.rootPath, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).trim();
+      const remoteHead = (await this.run(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).trim();
       if (remoteHead && await this.refExists(remoteHead)) return remoteHead;
     } catch {
       // An origin remote is optional.
@@ -201,7 +215,7 @@ export class GitRepository {
 
   async refExists(ref: string): Promise<boolean> {
     try {
-      await runGit(this.rootPath, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
+      await this.run(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
       return true;
     } catch {
       return false;
@@ -299,7 +313,7 @@ export class GitRepository {
   }
 
   private async commitsSince(baseBranch: string): Promise<CommitRecord[]> {
-    const output = await runGit(this.rootPath, [
+    const output = await this.run([
       'log', '--format=%H%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e', '--max-count=250', `${baseBranch}..HEAD`,
     ]);
     return parseCommitRecords(output);
@@ -307,7 +321,7 @@ export class GitRepository {
 
   private async commitsBehind(baseBranch: string): Promise<number> {
     try {
-      const count = await runGit(this.rootPath, ['rev-list', '--count', `HEAD..${baseBranch}`]);
+      const count = await this.run(['rev-list', '--count', `HEAD..${baseBranch}`]);
       return Number(count.trim()) || 0;
     } catch {
       return 0;
@@ -315,14 +329,18 @@ export class GitRepository {
   }
 
   private diffPatch(revisionArgs: string[]): Promise<string> {
-    return runGit(this.rootPath, ['diff', '--no-color', '--no-ext-diff', '--find-renames=40%', '--patch', ...revisionArgs, '--']);
+    return this.run(['diff', '--no-color', '--no-ext-diff', '--find-renames=40%', '--patch', ...revisionArgs, '--']);
   }
 
   private commitPatch(hash: string): Promise<string> {
-    return runGit(this.rootPath, ['show', '--format=', '--no-color', '--no-ext-diff', '--find-renames=40%', '--patch', hash, '--']);
+    return this.run(['show', '--format=', '--no-color', '--no-ext-diff', '--find-renames=40%', '--patch', hash, '--']);
   }
 
   private patchesForCommits(hashes: string[]): Promise<string> {
-    return runGit(this.rootPath, ['show', '--format=', '--no-color', '--no-ext-diff', '--find-renames=40%', '--patch', '--reverse', ...hashes, '--']);
+    return this.run(['show', '--format=', '--no-color', '--no-ext-diff', '--find-renames=40%', '--patch', '--reverse', ...hashes, '--']);
+  }
+
+  private run(args: string[]): Promise<string> {
+    return runGit(this.rootPath, args, this.options);
   }
 }
