@@ -19,8 +19,8 @@ features.
   commit is selected, they open that commit's parent-to-commit diff instead.
 - When filtering by commit author, file diffs include only the matching authors'
   highlighted changes while keeping the rest of the current file visible.
-- Author-filtered line totals are calculated from that final highlighted diff,
-  rather than by adding up edits from every matching commit.
+- Author-filtered rows use final `base → working tree` line totals for each
+  matching path, rather than adding up edits from every matching commit.
 - If a file does not exist on the selected base branch, it is shown as a full
   addition in author-filtered diffs.
 - Go to Definition, Declaration, Type Definition, and Implementation from a

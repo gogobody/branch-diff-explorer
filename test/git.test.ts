@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { applyOverallPatch, authorId, coalesceChangedFiles, DEFAULT_GIT_MAX_OUTPUT_BYTES, GitRepository, lineChangeTotals, parsePatch, revertPatchFromContent, runGit } from '../src/git';
+import { applyOverallLineTotals, applyOverallPatch, authorId, coalesceChangedFiles, DEFAULT_GIT_MAX_OUTPUT_BYTES, GitRepository, parsePatch, revertPatchFromContent, runGit } from '../src/git';
 
 const temporaryDirectories: string[] = [];
 
@@ -149,18 +149,23 @@ index 1234567..abcdef0 100644
   });
 });
 
-describe('lineChangeTotals', () => {
-  it('reports net file changes instead of the cumulative commit churn', () => {
-    const right = `const value = 'final';\n`;
-    const left = revertPatchFromContent(revertPatchFromContent(right, `diff --git a/example.ts b/example.ts
+describe('applyOverallLineTotals', () => {
+  it('uses branch diff totals without replacing the author-only patch', () => {
+    const authorFiles = parsePatch(`diff --git a/example.ts b/example.ts
 @@ -1 +1 @@
--const value = 'first';
-+const value = 'final';
-`), `diff --git a/example.ts b/example.ts
-@@ -0,0 +1 @@
-+const value = 'first';
-`);
-    expect(lineChangeTotals(left, right)).toEqual({ additions: 1, deletions: 0 });
+-before
++after
+`, 'author');
+    const branchFiles = parsePatch(`diff --git a/example.ts b/example.ts
+@@ -1,3 +1,2 @@
+-one
+-two
++updated
+ three
+`, 'committed');
+    const result = applyOverallLineTotals(authorFiles, branchFiles);
+    expect(result).toMatchObject([{ source: 'author', additions: 1, deletions: 2 }]);
+    expect(result[0].patch).toContain('+after');
   });
 });
 
@@ -202,6 +207,12 @@ describe('GitRepository author filtering', () => {
     await runGit(repositoryPath, ['add', '.']);
     await runGit(repositoryPath, ['commit', '-m', 'Bob updates the same file']);
     const bobUpdateHash = (await runGit(repositoryPath, ['rev-parse', 'HEAD'])).trim();
+    await writeFile(join(repositoryPath, 'readme.md'), '# Base\nBob first\n');
+    await runGit(repositoryPath, ['add', '.']);
+    await runGit(repositoryPath, ['commit', '-m', 'Bob edits an existing file']);
+    await writeFile(join(repositoryPath, 'readme.md'), '# Base\nBob final\n');
+    await runGit(repositoryPath, ['add', '.']);
+    await runGit(repositoryPath, ['commit', '-m', 'Bob updates the existing file']);
     await runGit(repositoryPath, ['config', 'user.name', 'Alice']);
     await runGit(repositoryPath, ['config', 'user.email', 'alice@example.test']);
     await writeFile(join(repositoryPath, 'src', 'bob.ts'), 'export const bob = "updated";\nexport const aliceFollowUp = true;\n');
@@ -212,21 +223,22 @@ describe('GitRepository author filtering', () => {
     const repository = new GitRepository(repositoryPath);
     const allChanges = await repository.snapshot({ baseBranch: 'main' });
     expect(allChanges.files.map((file) => file.path)).toEqual(expect.arrayContaining(['src/alice.ts', 'src/bob.ts']));
-    expect(allChanges.totals).toMatchObject({ files: 2, additions: 3, deletions: 0 });
+    expect(allChanges.totals).toMatchObject({ files: 3, additions: 4, deletions: 0 });
     expect(allChanges.files.find((file) => file.path === 'src/bob.ts')).toMatchObject({ additions: 2, deletions: 0 });
 
     const bobChanges = await repository.snapshot({
       baseBranch: 'main',
       authorIds: [authorId('Bob', 'bob@example.test')],
     });
-    expect(bobChanges.files).toHaveLength(1);
-    expect(bobChanges.files[0]).toMatchObject({ path: 'src/bob.ts', source: 'author', sources: ['author'], commitHash: bobUpdateHash, additions: 2, deletions: 0 });
-    expect(bobChanges.files[0].patch).not.toContain('aliceFollowUp');
+    expect(bobChanges.files).toHaveLength(2);
+    expect(bobChanges.files.find((file) => file.path === 'src/bob.ts')).toMatchObject({ source: 'author', sources: ['author'], commitHash: bobUpdateHash, additions: 2, deletions: 0 });
+    expect(bobChanges.files.find((file) => file.path === 'readme.md')).toMatchObject({ source: 'author', additions: 1, deletions: 0 });
+    expect(bobChanges.files.find((file) => file.path === 'src/bob.ts')?.patch).not.toContain('aliceFollowUp');
     expect(bobChanges.notice).toContain('Uncommitted work is excluded');
 
     const keywordChanges = await repository.snapshot({ baseBranch: 'main', authorKeyword: 'bob@example' });
-    expect(keywordChanges.files).toHaveLength(1);
-    expect(keywordChanges.files[0]).toMatchObject({ path: 'src/bob.ts', source: 'author' });
+    expect(keywordChanges.files).toHaveLength(2);
+    expect(keywordChanges.files.find((file) => file.path === 'src/bob.ts')).toMatchObject({ source: 'author' });
     expect(keywordChanges.activeAuthorKeyword).toBe('bob@example');
   });
 });
