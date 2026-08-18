@@ -243,6 +243,36 @@ new file mode 100644
     expect(left).toBe('export const insertedByBob = true;\n');
   });
 
+  it('recovers surviving author lines from a mixed block split by another author', () => {
+    const result = revertPatchWithDiagnostics(`static int heading = 1;
+new_one();
+bob_inserted();
+new_two();
+static int footer = 0;
+`, `diff --git a/example.c b/example.c
+index 1234567..abcdef0 100644
+--- a/example.c
++++ b/example.c
+@@ -1,4 +1,4 @@
+ static int heading = 0;
+-old_one();
+-old_two();
++new_one();
++new_two();
+ static int footer = 0;
+`);
+
+    expect(result).toEqual({
+      content: `static int heading = 1;
+old_one();
+old_two();
+bob_inserted();
+static int footer = 0;
+`,
+      unmatchedBlocks: 0,
+    });
+  });
+
   it('reports edits that were overwritten and cannot be highlighted safely', () => {
     const result = revertPatchWithDiagnostics(`const heading = 'changed by another author';
 const value = 'replaced by another author';

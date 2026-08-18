@@ -294,12 +294,16 @@ function revertFuzzyBlock(lines: string[], block: PatchEditBlock, usesCarriageRe
     lines.splice(index, block.newLines.length, ...withLineEnding(block.oldLines, usesCarriageReturns));
     return { complete: true };
   }
-  // A selected author can create several adjacent lines and another author
-  // can later insert between them. Treat those additions independently so
-  // the surviving selected lines still receive their diff highlight.
-  if (!block.oldLines.length && block.newLines.length > 1) {
-    const positions = separatedAdditionPositions(lines, block);
+  // A later commit can insert into or overwrite part of a multi-line author
+  // edit. Match the surviving lines in order inside a context-bounded region,
+  // including mixed deletion/addition blocks, instead of dropping the entire
+  // author change because it is no longer contiguous.
+  if (block.newLines.length > 1) {
+    const positions = separatedChangedLinePositions(lines, block);
+    if (!positions.length) return { complete: false };
+    const insertionIndex = positions[0];
     for (const position of [...positions].reverse()) lines.splice(position, 1);
+    lines.splice(insertionIndex, 0, ...withLineEnding(block.oldLines, usesCarriageReturns));
     return { complete: positions.length === block.newLines.length };
   }
   return { complete: false };
@@ -371,28 +375,65 @@ function findFuzzyPlacement(lines: string[], block: PatchEditBlock): number | un
   return result;
 }
 
-function separatedAdditionPositions(lines: string[], block: PatchEditBlock): number[] {
+function separatedChangedLinePositions(lines: string[], block: PatchEditBlock): number[] {
+  const { start, end } = fuzzySearchRange(lines, block);
+  const candidatesByLine = new Map<string, number[]>();
+  for (let index = start; index < end; index += 1) {
+    const key = normalizedLine(lines[index]);
+    const positions = candidatesByLine.get(key) ?? [];
+    positions.push(index);
+    candidatesByLine.set(key, positions);
+  }
   const positions: number[] = [];
-  let minimumIndex = 0;
-  for (let offset = 0; offset < block.newLines.length; offset += 1) {
-    const individual: PatchEditBlock = {
-      ...block,
-      newStart: block.newStart + offset,
-      newLines: [block.newLines[offset]],
-      beforeContext: offset === 0 ? block.beforeContext : [],
-      afterContext: offset === block.newLines.length - 1 ? block.afterContext : [],
-    };
-    const candidates = sequencePositions(lines, individual.newLines).filter((index) => index >= minimumIndex);
-    if (!candidates.length) continue;
-    const position = candidates.reduce((best, candidate) => {
-      return fuzzyPlacementScore(lines, candidate, individual) > fuzzyPlacementScore(lines, best, individual)
-        ? candidate
-        : best;
-    });
+  let minimumIndex = start;
+  for (const expected of block.newLines) {
+    const candidates = candidatesByLine.get(normalizedLine(expected)) ?? [];
+    const position = candidates.find((candidate) => candidate >= minimumIndex);
+    if (position === undefined) continue;
     positions.push(position);
     minimumIndex = position + 1;
   }
   return positions;
+}
+
+function fuzzySearchRange(lines: string[], block: PatchEditBlock): { start: number; end: number } {
+  const preferredIndex = Math.max(0, block.newStart - 1);
+  const radius = Math.max(200, block.newLines.length * 3);
+  const before = nearestContextEnd(lines, block.beforeContext, preferredIndex);
+  const after = nearestContextStart(lines, block.afterContext, preferredIndex + block.newLines.length);
+  const fallbackStart = Math.max(0, preferredIndex - radius);
+  const fallbackEnd = Math.min(lines.length, preferredIndex + block.newLines.length + radius);
+  const start = before ?? fallbackStart;
+  const end = after ?? fallbackEnd;
+  return end >= start ? { start, end } : { start: fallbackStart, end: fallbackEnd };
+}
+
+function nearestContextEnd(lines: string[], context: string[], preferredIndex: number): number | undefined {
+  for (let length = context.length; length > 0; length -= 1) {
+    const suffix = context.slice(-length);
+    const positions = sequencePositions(lines, suffix).map((position) => position + length);
+    if (positions.length) return nearestPosition(positions, preferredIndex);
+  }
+  return undefined;
+}
+
+function nearestContextStart(lines: string[], context: string[], preferredIndex: number): number | undefined {
+  for (let length = context.length; length > 0; length -= 1) {
+    const prefix = context.slice(0, length);
+    const positions = sequencePositions(lines, prefix);
+    if (positions.length) return nearestPosition(positions, preferredIndex);
+  }
+  return undefined;
+}
+
+function nearestPosition(positions: number[], preferredIndex: number): number {
+  return positions.reduce((best, position) => {
+    return Math.abs(position - preferredIndex) < Math.abs(best - preferredIndex) ? position : best;
+  });
+}
+
+function normalizedLine(line: string): string {
+  return line.replace(/\r$/, '');
 }
 
 function fuzzyPlacementScore(lines: string[], candidate: number, block: PatchEditBlock): number {
@@ -477,7 +518,7 @@ function sequencePositions(lines: string[], expected: string[]): number[] {
 }
 
 function sameLine(left: string, right: string): boolean {
-  return left === right || left.replace(/\r$/, '') === right.replace(/\r$/, '');
+  return left === right || normalizedLine(left) === normalizedLine(right);
 }
 
 function sourcePriority(source: ChangeSource): number {
