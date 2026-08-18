@@ -414,3 +414,40 @@ describe('GitRepository author filtering', () => {
     expect(snapshot.files[0].patch).toContain('two updated');
   });
 });
+
+describe('GitRepository comparison base', () => {
+  it('uses the merge base when both branches create the same path after diverging', async () => {
+    const repositoryPath = await mkdtemp(join(tmpdir(), 'branch-diff-explorer-merge-base-'));
+    temporaryDirectories.push(repositoryPath);
+    await runGit(repositoryPath, ['init', '--initial-branch=main']);
+    await runGit(repositoryPath, ['config', 'user.name', 'Alice']);
+    await runGit(repositoryPath, ['config', 'user.email', 'alice@example.test']);
+    await writeFile(join(repositoryPath, 'readme.md'), 'base\n');
+    await runGit(repositoryPath, ['add', '.']);
+    await runGit(repositoryPath, ['commit', '-m', 'base']);
+    const divergence = (await runGit(repositoryPath, ['rev-parse', 'HEAD'])).trim();
+
+    await runGit(repositoryPath, ['checkout', '-b', 'feature']);
+    await writeFile(join(repositoryPath, 'shared.ts'), 'export const value = "feature";\n');
+    await runGit(repositoryPath, ['add', '.']);
+    await runGit(repositoryPath, ['commit', '-m', 'feature creates shared path']);
+
+    await runGit(repositoryPath, ['checkout', 'main']);
+    await writeFile(join(repositoryPath, 'shared.ts'), 'export const value = "main";\n');
+    await runGit(repositoryPath, ['add', '.']);
+    await runGit(repositoryPath, ['commit', '-m', 'main creates shared path']);
+    await runGit(repositoryPath, ['checkout', 'feature']);
+
+    const repository = new GitRepository(repositoryPath);
+    const snapshot = await repository.snapshot({ baseBranch: 'main' });
+    expect(snapshot.files).toMatchObject([{
+      path: 'shared.ts',
+      status: 'added',
+      additions: 1,
+      deletions: 0,
+    }]);
+    expect(await repository.comparisonBase('main')).toBe(divergence);
+    await expect(repository.contentAt(divergence, 'shared.ts')).rejects.toThrow();
+    expect(await repository.contentAt('main', 'shared.ts')).toContain('main');
+  });
+});

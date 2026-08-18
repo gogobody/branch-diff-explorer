@@ -446,7 +446,12 @@ class ExplorerController implements vscode.Disposable {
       return;
     }
     const revision = source === 'commit' ? file.commitHash ?? snapshot.activeCommit : undefined;
-    const leftRef = revision ? `${revision}^` : snapshot.repository.baseBranch;
+    // The tree is calculated with Git's three-dot comparison. Use that same
+    // merge base for the editor's left pane; reading the latest base-branch
+    // tip can show unrelated changes made after the branches diverged.
+    const leftRef = revision
+      ? `${revision}^`
+      : await repository.comparisonBase(snapshot.repository.baseBranch);
     const rightRef = revision ?? 'HEAD';
     const left = this.content.put(await this.contentForRef(repository, leftRef, leftPath), leftTarget);
     const right = revision

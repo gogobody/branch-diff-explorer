@@ -533,6 +533,11 @@ export class GitRepository {
     return this.run(['show', `${ref}:${path}`]);
   }
 
+  /** The common ancestor used by Git's three-dot branch comparison. */
+  async comparisonBase(baseBranch: string): Promise<string> {
+    return (await this.run(['merge-base', baseBranch, 'HEAD'])).trim();
+  }
+
   async branches(): Promise<string[]> {
     const output = await this.run(['for-each-ref', '--format=%(refname:short)', 'refs/heads', 'refs/remotes']);
     return [...new Set(output.split('\n').map((branch) => branch.trim()).filter((branch) => branch && !branch.endsWith('/HEAD')))];
@@ -684,7 +689,7 @@ export class GitRepository {
   }
 
   private async workingTreePatch(baseBranch: string): Promise<string> {
-    const mergeBase = (await this.run(['merge-base', baseBranch, 'HEAD'])).trim();
+    const mergeBase = await this.comparisonBase(baseBranch);
     return this.diffPatch([mergeBase]);
   }
 

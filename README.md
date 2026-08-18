@@ -17,6 +17,9 @@ features.
   native side-by-side diff editor.
 - File rows open the complete base-branch-to-working-tree diff; when a single
   commit is selected, they open that commit's parent-to-commit diff instead.
+- The directory tree and diff editor use the same Git merge base, so changes
+  added independently to the base branch after divergence do not leak into the
+  left side of a branch diff.
 - When filtering by commit author, file diffs include only the matching authors'
   highlighted changes while keeping the rest of the current file visible.
 - Author highlights remain accurate when another commit changes surrounding
