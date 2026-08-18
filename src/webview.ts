@@ -352,7 +352,7 @@ export function createWebviewHtml(webview: vscode.Webview): string {
         return;
       }
       const tree = element('div', 'tree');
-      renderDirectory(tree, buildDirectoryTree(files), model.snapshot.repository.name, '', 0);
+      renderTreeRoot(tree, buildDirectoryTree(files));
       container.append(tree);
     }
 
@@ -368,6 +368,13 @@ export function createWebviewHtml(webview: vscode.Webview): string {
         node.files.push(file);
       });
       return root;
+    }
+
+    function renderTreeRoot(parent, node) {
+      [...node.directories.entries()].sort(([left], [right]) => left.localeCompare(right)).forEach(([name, child]) => {
+        renderDirectory(parent, child, name, name, 0);
+      });
+      node.files.sort((left, right) => left.path.localeCompare(right.path)).forEach((file) => parent.append(renderFile(file, 0)));
     }
 
     function renderDirectory(parent, node, name, directoryPath, depth) {
@@ -459,7 +466,7 @@ export function createWebviewHtml(webview: vscode.Webview): string {
     }
 
     function fileMatches(file) {
-      if (local.scope !== 'all' && file.source !== local.scope) return false;
+      if (local.scope !== 'all' && !(file.sources || [file.source]).includes(local.scope)) return false;
       if (local.status !== 'all' && file.status !== local.status) return false;
       const type = (/\\.[^/.]+$/.exec(file.path) || ['(no extension)'])[0].toLowerCase();
       if (local.extension !== 'all' && type !== local.extension) return false;

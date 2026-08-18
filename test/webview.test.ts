@@ -20,5 +20,7 @@ describe('Branch Diff Explorer webview', () => {
     expect(html).toContain('Reveal in file manager');
     expect(html).toContain('summary-totals');
     expect(html).toContain('Open Settings');
+    expect(html).toContain('renderTreeRoot(tree, buildDirectoryTree(files))');
+    expect(html).not.toContain('model.snapshot.repository.name, \'\', 0');
   });
 });

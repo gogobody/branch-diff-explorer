@@ -142,6 +142,39 @@ export function parsePatch(patch: string, source: ChangeSource): ChangedFile[] {
   });
 }
 
+/**
+ * A file can occur in more than one commit or Git state. Keep the tree useful
+ * by combining those records into the one path the user sees on disk.
+ */
+export function coalesceChangedFiles(files: ChangedFile[]): ChangedFile[] {
+  const byPath = new Map<string, ChangedFile>();
+  for (const file of files) {
+    const existing = byPath.get(file.path);
+    if (!existing) {
+      byPath.set(file.path, { ...file, sources: file.sources ?? [file.source], lines: [...file.lines] });
+      continue;
+    }
+    const preferred = sourcePriority(file.source) >= sourcePriority(existing.source) ? file : existing;
+    const sources = [...new Set([...(existing.sources ?? [existing.source]), ...(file.sources ?? [file.source])])];
+    byPath.set(file.path, {
+      ...existing,
+      source: preferred.source,
+      sources,
+      status: preferred.status,
+      previousPath: preferred.previousPath ?? existing.previousPath,
+      additions: existing.additions + file.additions,
+      deletions: existing.deletions + file.deletions,
+      lines: [...existing.lines, ...file.lines],
+      patch: [existing.patch, file.patch].filter(Boolean).join('\n'),
+    });
+  }
+  return [...byPath.values()];
+}
+
+function sourcePriority(source: ChangeSource): number {
+  return ({ author: 0, commit: 0, committed: 1, staged: 2, unstaged: 3 })[source];
+}
+
 function parseCommitRecords(output: string): CommitRecord[] {
   return output
     .split(RECORD_SEPARATOR)
@@ -272,6 +305,8 @@ export class GitRepository {
         ...parsePatch(unstaged, 'unstaged'),
       ];
     }
+
+    files = coalesceChangedFiles(files);
 
     const totals = {
       files: new Set(files.map((file) => file.path)).size,

@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { authorId, DEFAULT_GIT_MAX_OUTPUT_BYTES, GitRepository, parsePatch, runGit } from '../src/git';
+import { authorId, coalesceChangedFiles, DEFAULT_GIT_MAX_OUTPUT_BYTES, GitRepository, parsePatch, runGit } from '../src/git';
 
 const temporaryDirectories: string[] = [];
 
@@ -68,6 +68,35 @@ describe('Git output options', () => {
   });
 });
 
+describe('coalesceChangedFiles', () => {
+  it('shows a changed path once while retaining its Git states and line totals', () => {
+    const committed = parsePatch(`diff --git a/src/example.ts b/src/example.ts
+index 1234567..abcdef0 100644
+--- a/src/example.ts
++++ b/src/example.ts
+@@ -1 +1 @@
+-old
++committed
+`, 'committed')[0];
+    const unstaged = parsePatch(`diff --git a/src/example.ts b/src/example.ts
+index abcdef0..fedcba0 100644
+--- a/src/example.ts
++++ b/src/example.ts
+@@ -1 +1 @@
+-committed
++working-tree
+`, 'unstaged')[0];
+
+    expect(coalesceChangedFiles([committed, unstaged])).toMatchObject([{
+      path: 'src/example.ts',
+      source: 'unstaged',
+      sources: ['committed', 'unstaged'],
+      additions: 2,
+      deletions: 2,
+    }]);
+  });
+});
+
 describe('GitRepository author filtering', () => {
   it('returns an empty, usable snapshot for a repository without commits', async () => {
     const repositoryPath = await mkdtemp(join(tmpdir(), 'branch-diff-explorer-empty-'));
@@ -102,6 +131,9 @@ describe('GitRepository author filtering', () => {
     await writeFile(join(repositoryPath, 'src', 'bob.ts'), 'export const bob = true;\n');
     await runGit(repositoryPath, ['add', '.']);
     await runGit(repositoryPath, ['commit', '-m', 'Bob adds a file']);
+    await writeFile(join(repositoryPath, 'src', 'bob.ts'), 'export const bob = "updated";\n');
+    await runGit(repositoryPath, ['add', '.']);
+    await runGit(repositoryPath, ['commit', '-m', 'Bob updates the same file']);
     await writeFile(join(repositoryPath, 'uncommitted.ts'), 'export const uncommitted = true;\n');
 
     const repository = new GitRepository(repositoryPath);
@@ -114,7 +146,7 @@ describe('GitRepository author filtering', () => {
       authorIds: [authorId('Bob', 'bob@example.test')],
     });
     expect(bobChanges.files).toHaveLength(1);
-    expect(bobChanges.files[0]).toMatchObject({ path: 'src/bob.ts', source: 'author', status: 'added' });
+    expect(bobChanges.files[0]).toMatchObject({ path: 'src/bob.ts', source: 'author', sources: ['author'], additions: 2, deletions: 1 });
     expect(bobChanges.notice).toContain('Uncommitted work is excluded');
 
     const keywordChanges = await repository.snapshot({ baseBranch: 'main', authorKeyword: 'bob@example' });

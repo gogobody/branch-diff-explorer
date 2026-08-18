@@ -7,6 +7,8 @@ features.
 ## Features
 
 - Search additions and deletions across committed, staged, and unstaged changes.
+- Shows each changed path once in the directory tree, even when it was changed in
+  several commits or Git states; its line totals are combined.
 - Compare your branch with any local or remote base branch.
 - Filter by file change kind, Git state, extension, and glob patterns.
 - Open normal changes in VS Code's side-by-side diff editor.
@@ -40,6 +42,9 @@ features.
    uncommitted work because it cannot have a commit author yet.
 5. In a multi-root workspace, select **Workspace folder**. Use the **Session**
    picker’s `+`, rename, and delete controls to manage independent diff setups.
+6. Open **Branch Diff Explorer: Open Settings** to configure the base branch,
+   preview line limit, Git output buffer, or Git command timeout. The error UI
+   also links to these settings.
 
 The extension invokes only your local `git` executable and does not send source
 code, commit metadata, reviewer findings, or search queries over the network.

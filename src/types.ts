@@ -12,6 +12,8 @@ export interface ChangedFile {
   previousPath?: string;
   status: ChangeStatus;
   source: ChangeSource;
+  /** All Git states represented by this path when changes are combined. */
+  sources?: ChangeSource[];
   additions: number;
   deletions: number;
   lines: ChangedLine[];
