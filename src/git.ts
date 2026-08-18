@@ -16,6 +16,9 @@ import { loadReviewerData } from './reviewer';
 const execFileAsync = promisify(execFile);
 const RECORD_SEPARATOR = '\u001e';
 const FIELD_SEPARATOR = '\u001f';
+// Branch-wide patches can be substantially larger than Node's small default
+// stdout buffer. The webview still caps line previews separately.
+const GIT_MAX_OUTPUT_BYTES = 256 * 1024 * 1024;
 
 export class GitError extends Error {
   constructor(message: string) {
@@ -29,7 +32,7 @@ export async function runGit(cwd: string, args: string[]): Promise<string> {
     const { stdout } = await execFileAsync('git', args, {
       cwd,
       encoding: 'utf8',
-      maxBuffer: 25 * 1024 * 1024,
+      maxBuffer: GIT_MAX_OUTPUT_BYTES,
       windowsHide: true,
     });
     return stdout;
