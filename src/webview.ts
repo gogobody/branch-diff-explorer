@@ -87,6 +87,8 @@ export function createWebviewHtml(webview: vscode.Webview): string {
     .error { background: var(--vscode-inputValidation-errorBackground); border: 1px solid var(--vscode-inputValidation-errorBorder); color: var(--vscode-inputValidation-errorForeground); margin: 10px; padding: 8px; }
     .error button { margin-top: 8px; }
     .loading { color: var(--vscode-descriptionForeground); font-size: 11px; }
+    .filter-spinner { animation: filter-spin .7s linear infinite; border: 1.5px solid var(--vscode-descriptionForeground); border-radius: 50%; border-top-color: transparent; display: inline-block; height: 11px; width: 11px; }
+    @keyframes filter-spin { to { transform: rotate(360deg); } }
     .review { border-top: 1px solid var(--vscode-sideBar-border, var(--vscode-panel-border)); margin-top: 5px; padding: 8px 10px; }
     .review-heading { font-size: 11px; font-weight: 700; margin-bottom: 6px; }
     .briefing { background: var(--vscode-textBlockQuote-background); border-left: 2px solid var(--vscode-focusBorder); margin-bottom: 7px; padding: 6px 7px; }
@@ -108,6 +110,7 @@ export function createWebviewHtml(webview: vscode.Webview): string {
     .context-menu button:hover { background: var(--vscode-menu-selectionBackground); color: var(--vscode-menu-selectionForeground); }
     .context-menu .menu-separator { border-top: 1px solid var(--vscode-menu-separatorBackground, var(--vscode-widget-border)); margin: 4px 2px; }
     @media (max-width: 360px) { .grid, .filterbar .grid { grid-template-columns: 1fr; } }
+    @media (prefers-reduced-motion: reduce) { .filter-spinner { animation: none; border-top-color: var(--vscode-descriptionForeground); opacity: .65; } }
     @media (max-width: 190px) {
       .header { padding-left: 6px; padding-right: 6px; }
       .header-tools { gap: 1px; }
@@ -121,7 +124,7 @@ export function createWebviewHtml(webview: vscode.Webview): string {
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const app = document.getElementById('app');
-    let model = { snapshot: null, visibleFileKeys: [], repositories: [], session: null, sessions: [], loading: true, error: '' };
+    let model = { snapshot: null, visibleFileKeys: [], repositories: [], session: null, sessions: [], loading: true, filtering: false, error: '' };
     let remote = { sessionId: '', repositoryPath: '', baseBranch: '', authorIds: [], authorKeyword: '', commitHash: '' };
     let local = defaultLocal();
     let uiSaveTimer;
@@ -134,7 +137,7 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       const message = event.data;
       if (message.type === 'state') {
         const sessionChanged = remote.sessionId !== message.session.id;
-        model = { snapshot: message.snapshot, visibleFileKeys: message.visibleFileKeys || [], repositories: message.repositories || [], session: message.session, sessions: message.sessions || [], loading: false, error: '' };
+        model = { snapshot: message.snapshot, visibleFileKeys: message.visibleFileKeys || [], repositories: message.repositories || [], session: message.session, sessions: message.sessions || [], loading: false, filtering: false, error: '' };
         const repo = message.snapshot.repository;
         const config = message.session.config || {};
         remote.sessionId = message.session.id;
@@ -149,9 +152,11 @@ export function createWebviewHtml(webview: vscode.Webview): string {
         if (message.sessionId !== remote.sessionId || Number(message.revision || 0) < appliedFilterRevision) return;
         appliedFilterRevision = Number(message.revision || 0);
         model.visibleFileKeys = message.visibleFileKeys || [];
+        model.filtering = false;
         renderResults();
       } else if (message.type === 'error') {
         model.loading = false;
+        model.filtering = false;
         model.error = message.message || 'Unable to load the Git diff.';
         render();
       }
@@ -160,6 +165,7 @@ export function createWebviewHtml(webview: vscode.Webview): string {
     function postRefresh() {
       hideContextMenu();
       model.loading = true;
+      model.filtering = false;
       render();
       vscode.postMessage({ type: 'refresh', request: remote });
     }
@@ -183,6 +189,8 @@ export function createWebviewHtml(webview: vscode.Webview): string {
     function requestFilter() {
       const revision = ++filterRevision;
       clearTimeout(filterTimer);
+      model.filtering = true;
+      renderResults();
       filterTimer = setTimeout(() => vscode.postMessage({
         type: 'filter',
         sessionId: remote.sessionId,
@@ -404,6 +412,7 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       if (files.length !== model.snapshot.files.length) left.append(element('span', 'summary-filtered', formatCount(files.length) + ' shown'));
       const right = element('span', 'summary-totals');
       if (model.loading) right.append(element('span', 'loading', 'Refreshing…'));
+      else if (model.filtering) right.append(element('span', 'filter-spinner'), element('span', 'loading', local.query.trim() ? 'Searching…' : 'Filtering…'));
       else right.append(element('span', 'plus', '+' + formatCount(model.snapshot.totals.additions)), element('span', 'minus', '−' + formatCount(model.snapshot.totals.deletions)));
       summary.append(left, right); container.append(summary);
       if (model.snapshot.notice) container.append(element('div', 'notice', model.snapshot.notice));

@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { diffExportContent, diffExportRelativePath } from './export';
-import { visibleFileKeys as filteredFileKeys, type SessionUiConfig } from './filter';
+import { visibleFileKeysAsync as filteredFileKeys, type SessionUiConfig } from './filter';
 import { GitRepository, revertPatchWithDiagnostics, type GitRunOptions } from './git';
 import type { ExplorerSession, McpRepositorySettings, McpState } from './mcp-state';
 import { createWebviewHtml } from './webview';
@@ -74,6 +74,7 @@ class ExplorerWebview implements vscode.Disposable {
   private snapshot?: DiffSnapshot;
   private request: ViewRequest = {};
   private readonly disposables: vscode.Disposable[] = [];
+  private latestFilterRevision = 0;
 
   constructor(
     private readonly controller: ExplorerController,
@@ -117,10 +118,15 @@ class ExplorerWebview implements vscode.Disposable {
         return;
       case 'filter':
         if (this.snapshot && message.ui) {
+          const revision = message.revision ?? 0;
+          this.latestFilterRevision = Math.max(this.latestFilterRevision, revision);
+          const snapshot = this.snapshot;
+          const visibleFileKeys = await this.controller.visibleFileKeys(snapshot, message.ui);
+          if (snapshot !== this.snapshot || revision !== this.latestFilterRevision) return;
           await this.webview.postMessage({
             type: 'filtered',
-            visibleFileKeys: this.controller.visibleFileKeys(this.snapshot, message.ui),
-            revision: message.revision,
+            visibleFileKeys,
+            revision,
             sessionId: message.sessionId,
           });
         }
@@ -376,11 +382,11 @@ class ExplorerController implements vscode.Disposable {
       snapshot: enriched,
       session,
       sessions,
-      visibleFileKeys: this.visibleFileKeys(enriched, session.config.ui),
+      visibleFileKeys: await this.visibleFileKeys(enriched, session.config.ui),
     };
   }
 
-  visibleFileKeys(snapshot: DiffSnapshot, ui?: SessionUiConfig): string[] {
+  visibleFileKeys(snapshot: DiffSnapshot, ui?: SessionUiConfig): Promise<string[]> {
     return filteredFileKeys(snapshot.files, ui);
   }
 

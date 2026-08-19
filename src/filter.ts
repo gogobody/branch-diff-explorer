@@ -69,6 +69,22 @@ export function visibleFileKeys(files: ChangedFile[], config?: SessionUiConfig):
   return visibleChangedFiles(files, config).map(changedFileKey);
 }
 
+/**
+ * UI-friendly variant that periodically yields to the extension host while
+ * filtering large snapshots. This lets the webview paint its progress state
+ * instead of appearing frozen during a changed-line search.
+ */
+export async function visibleFileKeysAsync(files: ChangedFile[], config?: SessionUiConfig): Promise<string[]> {
+  const normalized = normalizeSessionUi(config);
+  const keys: string[] = [];
+  for (let index = 0; index < files.length; index += 1) {
+    const file = files[index];
+    if (file.status !== 'deleted' && fileMatchesFilter(file, normalized)) keys.push(changedFileKey(file));
+    if ((index + 1) % 25 === 0) await yieldToExtensionHost();
+  }
+  return keys;
+}
+
 export function changedFileKey(file: Pick<ChangedFile, 'path' | 'source'>): string {
   return `${file.source}\u0000${file.path}`;
 }
@@ -86,20 +102,15 @@ export function fileMatchesFilter(file: ChangedFile, config: NormalizedSessionUi
   if (matchesExcludedDirectory(file.path, config.excludeDirectories, config.caseSensitive)) return false;
   const query = splitSearchQuery(config.query);
   if (query.fileTerms.length && !query.fileTerms.every((term) => includes(file.path, term, config.caseSensitive))) return false;
-  return !query.text || matchingChangedLines(file, config).length > 0;
+  return !query.text || fullPatchHasMatchingChangedLine(file, query.text, config);
 }
 
 export function matchingChangedLines(file: ChangedFile, config?: SessionUiConfig | NormalizedSessionUiConfig): ChangedLine[] {
   const normalized = isNormalized(config) ? config : normalizeSessionUi(config);
   const query = splitSearchQuery(normalized.query).text;
   if (!query) return file.lines;
-  let matcher: RegExp;
-  try {
-    const expression = normalized.regex ? query : escapeRegex(query);
-    matcher = new RegExp(normalized.wholeWord ? `\\b(?:${expression})\\b` : expression, normalized.caseSensitive ? '' : 'i');
-  } catch {
-    return [];
-  }
+  const matcher = changedLineMatcher(query, normalized);
+  if (!matcher) return [];
   return file.lines.filter((line) => matcher.test(line.text));
 }
 
@@ -172,6 +183,46 @@ function includes(value: string, search: string, caseSensitive: boolean): boolea
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function fullPatchHasMatchingChangedLine(
+  file: ChangedFile,
+  query: string,
+  config: NormalizedSessionUiConfig,
+): boolean {
+  const matcher = changedLineMatcher(query, config);
+  if (!matcher) return false;
+  if (!file.patch) return file.lines.some((line) => matcher.test(line.text));
+
+  // Search only unified-diff hunk additions/deletions. Patch headers such as
+  // +++ b/file.c must not produce a match, while a real changed source line
+  // whose content starts with "++" still must be searchable.
+  let inHunk = false;
+  for (const line of file.patch.split(/\r?\n/)) {
+    if (line.startsWith('diff --git ')) {
+      inHunk = false;
+      continue;
+    }
+    if (line.startsWith('@@')) {
+      inHunk = true;
+      continue;
+    }
+    if (inHunk && (line.startsWith('+') || line.startsWith('-')) && matcher.test(line.slice(1))) return true;
+  }
+  return false;
+}
+
+function changedLineMatcher(query: string, config: NormalizedSessionUiConfig): RegExp | undefined {
+  try {
+    const expression = config.regex ? query : escapeRegex(query);
+    return new RegExp(config.wholeWord ? `\\b(?:${expression})\\b` : expression, config.caseSensitive ? '' : 'i');
+  } catch {
+    return undefined;
+  }
+}
+
+function yieldToExtensionHost(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 function isNormalized(config: SessionUiConfig | NormalizedSessionUiConfig | undefined): config is NormalizedSessionUiConfig {

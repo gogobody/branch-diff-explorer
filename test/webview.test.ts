@@ -30,6 +30,9 @@ describe('Branch Diff Explorer webview', () => {
     expect(html).toContain('model.visibleFileKeys');
     expect(html).toContain("type: 'filter'");
     expect(html).toContain('summary-totals');
+    expect(html).toContain('filter-spinner');
+    expect(html).toContain("local.query.trim() ? 'Searching…' : 'Filtering…'");
+    expect(html).toContain('model.filtering = true');
     expect(html).toContain('Open Settings');
     expect(html).toContain('Export filtered diffs');
     expect(html).toContain("type: 'exportDiffs'");

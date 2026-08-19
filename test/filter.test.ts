@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { changedFileKey, matchingChangedLines, visibleChangedFiles } from '../src/filter';
+import { changedFileKey, matchingChangedLines, visibleChangedFiles, visibleFileKeysAsync } from '../src/filter';
 import type { ChangedFile } from '../src/types';
 
 function file(path: string, overrides: Partial<ChangedFile> = {}): ChangedFile {
@@ -50,5 +50,33 @@ describe('shared file filtering', () => {
     });
     expect(matchingChangedLines(changed, { query: 'RouteStats', regex: true, wholeWord: true, caseSensitive: true })).toHaveLength(1);
     expect(visibleChangedFiles([changed], { query: '[', regex: true })).toEqual([]);
+  });
+
+  it('searches the complete patch when the changed-line preview was truncated', async () => {
+    const changed = file('source/services/spdk/module/bdev/glfs/bdev_glfs.c', {
+      lines: [{ kind: 'addition', line: 1, text: 'an earlier preview line' }],
+      patch: [
+        'diff --git a/source.c b/source.c',
+        '--- a/source.c',
+        '+++ b/source.c',
+        '@@ -4643,0 +4644,3 @@',
+        '+void glfs_bdev_get_route_stats(void)',
+        '+{',
+        '+}',
+      ].join('\n'),
+    });
+
+    expect(visibleChangedFiles([changed], { query: 'glfs_bdev_get_route_stats' })).toEqual([changed]);
+    expect(await visibleFileKeysAsync([changed], { query: 'glfs_bdev_get_route_stats' }))
+      .toEqual(['committed\u0000source/services/spdk/module/bdev/glfs/bdev_glfs.c']);
+    expect(matchingChangedLines(changed, { query: 'glfs_bdev_get_route_stats' })).toEqual([]);
+  });
+
+  it('does not treat unified-diff file headers as changed-line search results', () => {
+    const changed = file('src/header-only.ts', {
+      lines: [],
+      patch: ['diff --git a/src/header-only.ts b/src/header-only.ts', '--- a/src/header-only.ts', '+++ b/src/header-only.ts'].join('\n'),
+    });
+    expect(visibleChangedFiles([changed], { query: 'header-only.ts' })).toEqual([]);
   });
 });
