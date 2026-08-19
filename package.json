@@ -3,7 +3,7 @@
   "displayName": "Branch Diff Explorer",
   "description": "Search and review only the changes in your Git branch.",
   "version": "0.1.32",
-  "publisher": "local",
+  "publisher": "ginux",
   "license": "MIT",
   "repository": {
     "type": "git",
