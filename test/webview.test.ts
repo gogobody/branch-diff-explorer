@@ -35,6 +35,9 @@ describe('Branch Diff Explorer webview', () => {
     expect(html).toContain('model.visibleFileKeys');
     expect(html).toContain("type: 'filter'");
     expect(html).toContain('summary-totals');
+    expect(html).toContain('visibleChangeTotals(files)');
+    expect(html).toContain("totals.additions + Number(file.additions || 0)");
+    expect(html).not.toContain('model.snapshot.totals.additions');
     expect(html).toContain('filter-spinner');
     expect(html).toContain("local.query.trim() ? 'Searching…' : 'Filtering…'");
     expect(html).toContain('model.filtering = true');

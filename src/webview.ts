@@ -498,13 +498,15 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       if (!container || !model.snapshot) return;
       container.replaceChildren();
       const files = visibleFiles();
+      const totals = visibleChangeTotals(files);
       const summary = element('div', 'summary');
       const left = element('span'); left.append(element('strong', '', formatCount(model.snapshot.totals.files)), document.createTextNode(' files'));
       if (files.length !== model.snapshot.files.length) left.append(element('span', 'summary-filtered', formatCount(files.length) + ' shown'));
       const right = element('span', 'summary-totals');
+      right.title = 'Line totals for the ' + files.length + ' files currently shown';
       if (model.loading) right.append(element('span', 'loading', 'Refreshing…'));
       else if (model.filtering) right.append(element('span', 'filter-spinner'), element('span', 'loading', local.query.trim() ? 'Searching…' : 'Filtering…'));
-      else right.append(element('span', 'plus', '+' + formatCount(model.snapshot.totals.additions)), element('span', 'minus', '−' + formatCount(model.snapshot.totals.deletions)));
+      else right.append(element('span', 'plus', '+' + formatCount(totals.additions)), element('span', 'minus', '−' + formatCount(totals.deletions)));
       summary.append(left, right); container.append(summary);
       if (model.snapshot.notice) container.append(element('div', 'notice', model.snapshot.notice));
       if (model.snapshot.reviewer.warning) container.append(element('div', 'notice', model.snapshot.reviewer.warning));
@@ -523,6 +525,13 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       if (!model.snapshot) return [];
       const keys = new Set(model.visibleFileKeys || []);
       return model.snapshot.files.filter((file) => keys.has(file.source + String.fromCharCode(0) + file.path));
+    }
+
+    function visibleChangeTotals(files) {
+      return files.reduce((totals, file) => ({
+        additions: totals.additions + Number(file.additions || 0),
+        deletions: totals.deletions + Number(file.deletions || 0),
+      }), { additions: 0, deletions: 0 });
     }
 
     function buildDirectoryTree(files) {

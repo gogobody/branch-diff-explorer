@@ -13,8 +13,12 @@ features.
 - Search additions and deletions across committed, staged, and unstaged changes.
 - Shows each changed path once in the directory tree, even when it was changed in
   several commits or Git states; its line totals reflect only the final diff.
-- Keeps deleted files out of the directory tree while retaining their removals
-  in the branch summary totals.
+- Keeps deleted files out of the directory tree and its visible totals. The
+  complete comparison scope, including deletions, remains available through
+  MCP `scopeTotals`.
+- The sidebar `+ / −` summary always totals the files currently shown in the
+  directory tree, so search, glob, file-type, and excluded-path changes update
+  it immediately.
 - Compare your branch with any local or remote base branch.
 - Filter by file change kind, Git state, extension, and glob patterns.
 - Open normal changes, author-filtered changes, and single commits in VS Code's
@@ -257,7 +261,10 @@ Branch Diff Explorer 是一个完全在本地运行的 VS Code 插件，用于�
 - 搜索已提交、已暂存和未暂存改动中的新增行与删除行。
 - 目录树中每个路径只显示一次，即使文件经过多次提交或同时存在于多个 Git
   状态；文件的增删行数只反映最终 Diff，不累加中间提交。
-- 已删除文件不会显示在目录树中，但其删除行仍保留在未过滤的分支范围汇总中。
+- 已删除文件不会显示在目录树及其可见汇总中；包含删除文件的完整比较范围仍可
+  通过 MCP `scopeTotals` 获取。
+- 侧栏顶部的 `+ / −` 始终汇总目录树当前显示的文件，因此搜索、Glob、文件类型
+  或排除路径发生变化后会立即重新统计。
 - 可以与任意本地或远程基线分支比较。
 - 支持按变更类型、Git 状态、扩展名和 Glob 表达式过滤。
 - 普通分支改动、作者过滤改动和单次提交都使用 VS Code 原生左右对比窗口打开。
