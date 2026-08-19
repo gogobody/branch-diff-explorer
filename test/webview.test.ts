@@ -21,11 +21,13 @@ describe('Branch Diff Explorer webview', () => {
     expect(html).toContain('showFolderContextMenu');
     expect(html).toContain('Reveal in Explorer');
     expect(html).toContain('Find in folder');
-    expect(html).toContain("file.status !== 'deleted'");
+    expect(html).toContain('model.visibleFileKeys');
+    expect(html).toContain("type: 'filter'");
     expect(html).toContain('summary-totals');
     expect(html).toContain('Open Settings');
     expect(html).toContain('Export filtered diffs');
     expect(html).toContain("type: 'exportDiffs'");
+    expect(html).toContain("type: 'showMcpSetup'");
     expect(html).toContain('const files = visibleFiles()');
     expect(html).toContain('renderTreeRoot(tree, buildDirectoryTree(files))');
     expect(html).not.toContain('model.snapshot.repository.name, \'\', 0');

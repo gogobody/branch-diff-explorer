@@ -1,34 +1,23 @@
 import * as vscode from 'vscode';
-import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
+import { execFile } from 'node:child_process';
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { promisify } from 'node:util';
 import { diffExportContent, diffExportRelativePath } from './export';
+import { visibleFileKeys as filteredFileKeys, type SessionUiConfig } from './filter';
 import { GitRepository, revertPatchWithDiagnostics, type GitRunOptions } from './git';
+import type { ExplorerSession, McpRepositorySettings, McpState } from './mcp-state';
 import { createWebviewHtml } from './webview';
 import type { ChangedFile, DiffSnapshot, FindingSeverity, SnapshotRequest } from './types';
 
 const CONTENT_SCHEME = 'branch-diff-explorer-content';
 const SESSIONS_STORAGE_KEY = 'branchDiffExplorer.sessions.v1';
+const MCP_RUNTIME_FILE = 'branch-diff-explorer-mcp.js';
+const MCP_STATE_FILE = 'branch-diff-explorer-mcp-state.json';
+const execFileAsync = promisify(execFile);
 
 interface RepositoryChoice {
   path: string;
   name: string;
-}
-
-interface SessionUiConfig {
-  query?: string;
-  scope?: string;
-  status?: string;
-  extension?: string;
-  glob?: string;
-  excludeDirectories?: string;
-  caseSensitive?: boolean;
-  regex?: boolean;
-  wholeWord?: boolean;
-}
-
-interface ExplorerSession {
-  id: string;
-  name: string;
-  config: SnapshotRequest & { repositoryPath?: string; ui?: SessionUiConfig };
 }
 
 interface ViewRequest extends SnapshotRequest {
@@ -40,10 +29,11 @@ interface ExplorerViewState {
   snapshot: DiffSnapshot;
   session: ExplorerSession;
   sessions: ExplorerSession[];
+  visibleFileKeys: string[];
 }
 
 interface ViewMessage {
-  type: 'ready' | 'refresh' | 'switchSession' | 'createSession' | 'renameSession' | 'deleteSession' | 'saveSession' | 'openFile' | 'openPanel' | 'exportDiffs' | 'openSettings' | 'openPath' | 'copyPath' | 'revealPath' | 'revealInExplorer' | 'findInFolder' | 'toggleFavorite' | 'toggleReviewed' | 'triage' | 'info';
+  type: 'ready' | 'refresh' | 'filter' | 'switchSession' | 'createSession' | 'renameSession' | 'deleteSession' | 'saveSession' | 'openFile' | 'openPanel' | 'exportDiffs' | 'showMcpSetup' | 'openSettings' | 'openPath' | 'copyPath' | 'revealPath' | 'revealInExplorer' | 'findInFolder' | 'toggleFavorite' | 'toggleReviewed' | 'triage' | 'info';
   request?: ViewRequest;
   sessionId?: string;
   ui?: SessionUiConfig;
@@ -54,6 +44,7 @@ interface ViewMessage {
   findingId?: string;
   decision?: 'agreed' | 'skipped';
   copyKind?: 'absolute' | 'relative' | 'name' | 'uri';
+  revision?: number;
 }
 
 class VirtualGitContent implements vscode.TextDocumentContentProvider {
@@ -102,6 +93,7 @@ class ExplorerWebview implements vscode.Disposable {
       await this.webview.postMessage({
         type: 'state',
         snapshot: state.snapshot,
+        visibleFileKeys: state.visibleFileKeys,
         repositories: await this.controller.repositories(),
         session: state.session,
         sessions: state.sessions,
@@ -122,6 +114,16 @@ class ExplorerWebview implements vscode.Disposable {
       case 'ready':
       case 'refresh':
         await this.refresh(message.request);
+        return;
+      case 'filter':
+        if (this.snapshot && message.ui) {
+          await this.webview.postMessage({
+            type: 'filtered',
+            visibleFileKeys: this.controller.visibleFileKeys(this.snapshot, message.ui),
+            revision: message.revision,
+            sessionId: message.sessionId,
+          });
+        }
         return;
       case 'switchSession':
         if (message.sessionId) await this.refresh({ sessionId: message.sessionId });
@@ -157,6 +159,9 @@ class ExplorerWebview implements vscode.Disposable {
         } catch (error) {
           void vscode.window.showErrorMessage(`Branch Diff Explorer: Unable to export diffs: ${errorMessage(error)}`);
         }
+        return;
+      case 'showMcpSetup':
+        await this.controller.showMcpSetup();
         return;
       case 'openSettings':
         await this.controller.openSettings();
@@ -236,11 +241,22 @@ class ExplorerController implements vscode.Disposable {
   private readonly clients = new Set<ExplorerWebview>();
   private readonly sidebar: SidebarProvider;
   private readonly decorations: Record<FindingSeverity, vscode.TextEditorDecorationType>;
+  private readonly mcpRuntimeUri: vscode.Uri;
+  private readonly mcpStateUri: vscode.Uri;
+  private readonly mcpReady: Promise<void>;
   private lastSnapshot?: DiffSnapshot;
   private refreshTimer?: NodeJS.Timeout;
+  private activeSessionId?: string;
+  private mcpInitializationError?: string;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.sidebar = new SidebarProvider(this);
+    this.mcpRuntimeUri = vscode.Uri.joinPath(context.globalStorageUri, MCP_RUNTIME_FILE);
+    this.mcpStateUri = vscode.Uri.joinPath(context.storageUri ?? context.globalStorageUri, MCP_STATE_FILE);
+    this.mcpReady = this.prepareMcpRuntime();
+    void this.mcpReady
+      .then(() => this.syncMcpState(this.sessions()))
+      .catch((error) => { this.mcpInitializationError = errorMessage(error); });
     const gitWatcher = vscode.workspace.createFileSystemWatcher('**/.git/**');
     const reviewerWatcher = vscode.workspace.createFileSystemWatcher('**/.diffly/findings.json');
     this.decorations = {
@@ -269,6 +285,10 @@ class ExplorerController implements vscode.Disposable {
       vscode.commands.registerCommand('branchDiffExplorer.openPanel', () => this.openPanel()),
       vscode.commands.registerCommand('branchDiffExplorer.refresh', () => this.refreshAll()),
       vscode.commands.registerCommand('branchDiffExplorer.openSettings', () => this.openSettings()),
+      vscode.commands.registerCommand('branchDiffExplorer.mcpSetup', () => this.showMcpSetup()),
+      vscode.commands.registerCommand('branchDiffExplorer.copyCodexMcpConfig', () => this.copyCodexMcpConfig()),
+      vscode.commands.registerCommand('branchDiffExplorer.copyClaudeMcpConfig', () => this.copyClaudeMcpConfig()),
+      vscode.commands.registerCommand('branchDiffExplorer.testMcp', () => this.testMcp()),
       vscode.workspace.onDidSaveTextDocument(() => this.scheduleRefresh()),
       vscode.workspace.onDidChangeWorkspaceFolders(() => this.scheduleRefresh()),
       gitWatcher,
@@ -341,6 +361,7 @@ class ExplorerController implements vscode.Disposable {
       triage: this.context.workspaceState.get<Record<string, 'agreed' | 'skipped'>>(`${stateKey}:triage`, {}),
     };
     this.lastSnapshot = enriched;
+    this.activeSessionId = session.id;
     this.decorateFindings(enriched);
     session.config = {
       ...session.config,
@@ -351,7 +372,16 @@ class ExplorerController implements vscode.Disposable {
       commitHash: enriched.activeCommit,
     };
     await this.saveSessions(sessions);
-    return { snapshot: enriched, session, sessions };
+    return {
+      snapshot: enriched,
+      session,
+      sessions,
+      visibleFileKeys: this.visibleFileKeys(enriched, session.config.ui),
+    };
+  }
+
+  visibleFileKeys(snapshot: DiffSnapshot, ui?: SessionUiConfig): string[] {
+    return filteredFileKeys(snapshot.files, ui);
   }
 
   async createSession(sourceId?: string): Promise<ExplorerSession | undefined> {
@@ -404,6 +434,7 @@ class ExplorerController implements vscode.Disposable {
     const choice = await vscode.window.showWarningMessage(`Delete the “${session.name}” session?`, { modal: true }, 'Delete');
     if (choice !== 'Delete') return session;
     const remaining = sessions.filter((candidate) => candidate.id !== sessionId);
+    if (this.activeSessionId === sessionId) this.activeSessionId = remaining[0]?.id;
     await this.saveSessions(remaining);
     return remaining[0];
   }
@@ -605,6 +636,79 @@ class ExplorerController implements vscode.Disposable {
     await this.context.workspaceState.update(key, next);
   }
 
+  async showMcpSetup(): Promise<void> {
+    const selection = await vscode.window.showQuickPick([
+      {
+        label: '$(copy) Copy Codex MCP configuration',
+        description: 'TOML for ~/.codex/config.toml or a project .codex/config.toml',
+        action: 'codex',
+      },
+      {
+        label: '$(copy) Copy Claude Code MCP configuration',
+        description: 'JSON entry for the project .mcp.json file',
+        action: 'claude',
+      },
+      {
+        label: '$(beaker) Test local MCP server',
+        description: 'Start the bundled server and verify that it can read saved sessions',
+        action: 'test',
+      },
+    ], { title: 'Branch Diff Explorer MCP', placeHolder: 'Choose an MCP setup action' });
+    if (selection?.action === 'codex') await this.copyCodexMcpConfig();
+    if (selection?.action === 'claude') await this.copyClaudeMcpConfig();
+    if (selection?.action === 'test') await this.testMcp();
+  }
+
+  async copyCodexMcpConfig(): Promise<void> {
+    if (!await this.ensureMcpAvailable()) return;
+    await this.syncMcpState(this.sessions());
+    const config = [
+      '[mcp_servers.branch_diff_explorer]',
+      `command = ${tomlString(this.mcpNodeCommand())}`,
+      `args = [${tomlString(this.mcpRuntimeUri.fsPath)}, "--state", ${tomlString(this.mcpStateUri.fsPath)}]`,
+      'startup_timeout_sec = 20',
+      'tool_timeout_sec = 120',
+    ].join('\n');
+    await vscode.env.clipboard.writeText(config);
+    void vscode.window.showInformationMessage('Copied Codex MCP configuration. Add it to ~/.codex/config.toml or this project’s .codex/config.toml, then restart the Codex client.');
+  }
+
+  async copyClaudeMcpConfig(): Promise<void> {
+    if (!await this.ensureMcpAvailable()) return;
+    await this.syncMcpState(this.sessions());
+    const config = JSON.stringify({
+      mcpServers: {
+        'branch-diff-explorer': {
+          command: this.mcpNodeCommand(),
+          args: [this.mcpRuntimeUri.fsPath, '--state', this.mcpStateUri.fsPath],
+        },
+      },
+    }, null, 2);
+    await vscode.env.clipboard.writeText(config);
+    void vscode.window.showInformationMessage('Copied Claude Code MCP configuration. Merge it into this project’s .mcp.json, then reconnect the client.');
+  }
+
+  async testMcp(): Promise<void> {
+    if (!await this.ensureMcpAvailable()) return;
+    try {
+      await this.syncMcpState(this.sessions());
+      const { stdout } = await execFileAsync(
+        this.mcpNodeCommand(),
+        [this.mcpRuntimeUri.fsPath, '--state', this.mcpStateUri.fsPath, '--self-test'],
+        { encoding: 'utf8', timeout: 30_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true },
+      );
+      const response = JSON.parse(stdout);
+      const sessions = Array.isArray(response.sessions) ? response.sessions : [];
+      const count = sessions.filter((session: { repositoryPath?: unknown }) => typeof session?.repositoryPath === 'string').length;
+      if (!count) throw new Error('The server returned no saved sessions.');
+      void vscode.window.showInformationMessage(`Branch Diff Explorer MCP is ready · ${count} session${count === 1 ? '' : 's'} available.`);
+    } catch (error) {
+      const message = `MCP self-test failed: ${errorMessage(error)}`;
+      const action = await vscode.window.showErrorMessage(`Branch Diff Explorer: ${message}`, 'Open Settings');
+      if (action === 'Open Settings') await this.openSettings();
+    }
+  }
+
   async openSettings(): Promise<void> {
     await vscode.commands.executeCommand('workbench.action.openSettings', 'branchDiffExplorer');
   }
@@ -694,6 +798,74 @@ class ExplorerController implements vscode.Disposable {
 
   private async saveSessions(sessions: ExplorerSession[]): Promise<void> {
     await this.context.workspaceState.update(SESSIONS_STORAGE_KEY, sessions);
+    try {
+      await this.syncMcpState(sessions);
+      this.mcpInitializationError = undefined;
+    } catch (error) {
+      // Diff browsing must remain available even if Node or the bundled MCP
+      // runtime cannot be prepared. MCP setup/self-test surfaces this error.
+      this.mcpInitializationError = errorMessage(error);
+    }
+  }
+
+  private async prepareMcpRuntime(): Promise<void> {
+    await vscode.workspace.fs.createDirectory(this.context.globalStorageUri);
+    await vscode.workspace.fs.createDirectory(vscode.Uri.file(dirname(this.mcpStateUri.fsPath)));
+    const bundled = vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'mcp-server.js');
+    await vscode.workspace.fs.copy(bundled, this.mcpRuntimeUri, { overwrite: true });
+  }
+
+  private async syncMcpState(sessions: ExplorerSession[]): Promise<void> {
+    await this.mcpReady;
+    const fallbackRepository = sessions.some((session) => !session.config.repositoryPath)
+      ? (await this.repositories())[0]?.path
+      : undefined;
+    const exportedSessions = sessions.map((session) => ({
+      ...session,
+      config: {
+        ...session.config,
+        repositoryPath: session.config.repositoryPath ?? fallbackRepository,
+        authorIds: session.config.authorIds ? [...session.config.authorIds] : [],
+        ui: session.config.ui ? { ...session.config.ui } : {},
+      },
+    }));
+    const repositories: Record<string, McpRepositorySettings> = {};
+    for (const repositoryPath of new Set(exportedSessions.map((session) => session.config.repositoryPath).filter((path): path is string => Boolean(path)))) {
+      const configuration = vscode.workspace.getConfiguration('branchDiffExplorer', vscode.Uri.file(repositoryPath));
+      repositories[repositoryPath] = {
+        defaultBaseBranch: configuration.get<string>('defaultBaseBranch', ''),
+        maxChangedLines: clamp(configuration.get<number>('maxChangedLines', 4000), 100, 20_000, 4_000),
+        gitMaxOutputBufferMB: clamp(configuration.get<number>('gitMaxOutputBufferMB', 256), 16, 4_096, 256),
+        gitCommandTimeoutMs: clamp(configuration.get<number>('gitCommandTimeoutMs', 0), 0, 600_000, 0),
+      };
+    }
+    const state: McpState = {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      activeSessionId: this.activeSessionId ?? exportedSessions[0]?.id,
+      sessions: exportedSessions,
+      repositories,
+    };
+    const parent = vscode.Uri.file(dirname(this.mcpStateUri.fsPath));
+    await vscode.workspace.fs.createDirectory(parent);
+    const temporary = vscode.Uri.joinPath(parent, `${MCP_STATE_FILE}.${process.pid}.${Date.now()}.tmp`);
+    await vscode.workspace.fs.writeFile(temporary, Buffer.from(`${JSON.stringify(state, null, 2)}\n`, 'utf8'));
+    await vscode.workspace.fs.rename(temporary, this.mcpStateUri, { overwrite: true });
+  }
+
+  private async ensureMcpAvailable(): Promise<boolean> {
+    try {
+      await this.mcpReady;
+      return true;
+    } catch (error) {
+      const message = this.mcpInitializationError ?? errorMessage(error);
+      void vscode.window.showErrorMessage(`Branch Diff Explorer: MCP runtime is unavailable: ${message}`);
+      return false;
+    }
+  }
+
+  private mcpNodeCommand(): string {
+    return vscode.workspace.getConfiguration('branchDiffExplorer').get<string>('mcpNodeCommand', 'node').trim() || 'node';
   }
 
   private async toggleStringState(snapshot: DiffSnapshot, kind: 'favorites' | 'reviewed', value: string): Promise<void> {
@@ -741,6 +913,10 @@ function errorMessage(error: unknown): string {
 function clamp(value: number, minimum: number, maximum: number, fallback: number): number {
   if (!Number.isFinite(value)) return fallback;
   return Math.min(maximum, Math.max(minimum, Math.floor(value)));
+}
+
+function tomlString(value: string): string {
+  return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
 }
 
 export function activate(context: vscode.ExtensionContext): void {

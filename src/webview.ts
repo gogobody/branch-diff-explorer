@@ -28,6 +28,7 @@ export function createWebviewHtml(webview: vscode.Webview): string {
     .branch-ref { background: var(--vscode-badge-background); border-radius: 2px; color: var(--vscode-badge-foreground); overflow: hidden; padding: 1px 4px; text-overflow: ellipsis; }
     .branch-arrow { color: var(--vscode-descriptionForeground); }
     .icon { border: 0; background: transparent; border-radius: 3px; padding: 3px 5px; font-size: 16px; line-height: 18px; color: var(--vscode-icon-foreground); }
+    .mcp-icon { font-size: 9px; font-weight: 800; letter-spacing: .2px; }
     .controls { padding: 10px 10px 7px; border-bottom: 1px solid var(--vscode-sideBar-border, var(--vscode-panel-border)); }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
     .field { min-width: 0; }
@@ -105,17 +106,20 @@ export function createWebviewHtml(webview: vscode.Webview): string {
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const app = document.getElementById('app');
-    let model = { snapshot: null, repositories: [], session: null, sessions: [], loading: true, error: '' };
+    let model = { snapshot: null, visibleFileKeys: [], repositories: [], session: null, sessions: [], loading: true, error: '' };
     let remote = { sessionId: '', repositoryPath: '', baseBranch: '', authorIds: [], authorKeyword: '', commitHash: '' };
     let local = defaultLocal();
     let uiSaveTimer;
+    let filterTimer;
+    let filterRevision = 0;
+    let appliedFilterRevision = 0;
     let contextMenu;
 
     window.addEventListener('message', (event) => {
       const message = event.data;
       if (message.type === 'state') {
         const sessionChanged = remote.sessionId !== message.session.id;
-        model = { snapshot: message.snapshot, repositories: message.repositories || [], session: message.session, sessions: message.sessions || [], loading: false, error: '' };
+        model = { snapshot: message.snapshot, visibleFileKeys: message.visibleFileKeys || [], repositories: message.repositories || [], session: message.session, sessions: message.sessions || [], loading: false, error: '' };
         const repo = message.snapshot.repository;
         const config = message.session.config || {};
         remote.sessionId = message.session.id;
@@ -126,6 +130,11 @@ export function createWebviewHtml(webview: vscode.Webview): string {
         remote.commitHash = message.snapshot.activeCommit || '';
         if (sessionChanged) local = { ...defaultLocal(), ...(config.ui || {}), collapsedDirectories: {} };
         render();
+      } else if (message.type === 'filtered') {
+        if (message.sessionId !== remote.sessionId || Number(message.revision || 0) < appliedFilterRevision) return;
+        appliedFilterRevision = Number(message.revision || 0);
+        model.visibleFileKeys = message.visibleFileKeys || [];
+        renderResults();
       } else if (message.type === 'error') {
         model.loading = false;
         model.error = message.message || 'Unable to load the Git diff.';
@@ -154,6 +163,17 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       if (!sessionId) return;
       clearTimeout(uiSaveTimer);
       uiSaveTimer = setTimeout(() => vscode.postMessage({ type: 'saveSession', sessionId, ui }), 180);
+    }
+
+    function requestFilter() {
+      const revision = ++filterRevision;
+      clearTimeout(filterTimer);
+      filterTimer = setTimeout(() => vscode.postMessage({
+        type: 'filter',
+        sessionId: remote.sessionId,
+        ui: sessionUi(),
+        revision,
+      }), 35);
     }
 
     function element(tag, className, text) {
@@ -252,7 +272,7 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       const input = element('input');
       input.value = value;
       input.placeholder = placeholder;
-      input.addEventListener('input', () => { callback(input.value); renderResults(); saveSessionUi(); });
+      input.addEventListener('input', () => { callback(input.value); requestFilter(); saveSessionUi(); });
       return input;
     }
 
@@ -261,7 +281,7 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       const input = element('input');
       input.type = 'checkbox';
       input.checked = value;
-      input.addEventListener('change', () => { callback(input.checked); renderResults(); saveSessionUi(); });
+      input.addEventListener('change', () => { callback(input.checked); requestFilter(); saveSessionUi(); });
       label.append(input, document.createTextNode(labelText));
       return label;
     }
@@ -296,9 +316,12 @@ export function createWebviewHtml(webview: vscode.Webview): string {
         if (!files.length) return;
         vscode.postMessage({ type: 'exportDiffs', files: files.map((file) => ({ path: file.path, source: file.source })) });
       });
+      const mcp = element('button', 'icon mcp-icon', 'MCP');
+      mcp.title = 'Configure AI access through MCP'; mcp.setAttribute('aria-label', 'Configure Branch Diff MCP');
+      mcp.addEventListener('click', () => vscode.postMessage({ type: 'showMcpSetup' }));
       const panel = element('button', 'icon', '↗');
       panel.title = 'Open in editor panel'; panel.setAttribute('aria-label', 'Open in editor panel'); panel.addEventListener('click', () => vscode.postMessage({ type: 'openPanel', request: remote }));
-      buttons.append(exportDiffs, refresh, panel); titleRow.append(titleWrap, buttons); header.append(titleRow); app.append(header);
+      buttons.append(mcp, exportDiffs, refresh, panel); titleRow.append(titleWrap, buttons); header.append(titleRow); app.append(header);
 
       const controls = element('section', 'controls');
       const primary = element('div', 'grid');
@@ -314,16 +337,16 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       const filterGrid = element('div', 'grid');
       const source = element('select');
       [['all', 'All Git states'], ['committed', 'Committed'], ['staged', 'Staged'], ['unstaged', 'Unstaged']].forEach(([value, label]) => source.append(option(value, label, local.scope === value)));
-      source.disabled = Boolean(remote.commitHash || remote.authorIds.length || remote.authorKeyword); source.addEventListener('change', () => { local.scope = source.value; renderResults(); saveSessionUi(); });
+      source.disabled = Boolean(remote.commitHash || remote.authorIds.length || remote.authorKeyword); source.addEventListener('change', () => { local.scope = source.value; requestFilter(); saveSessionUi(); });
       filterGrid.append(field('Git state', source));
       const status = element('select');
       [['all', 'All changes'], ['added', 'Added'], ['modified', 'Modified'], ['deleted', 'Deleted'], ['renamed', 'Renamed']].forEach(([value, label]) => status.append(option(value, label, local.status === value)));
-      status.addEventListener('change', () => { local.status = status.value; renderResults(); saveSessionUi(); });
+      status.addEventListener('change', () => { local.status = status.value; requestFilter(); saveSessionUi(); });
       filterGrid.append(field('Change kind', status));
       const extension = element('select');
       extension.append(option('all', 'All file types', local.extension === 'all'));
       fileExtensions(snapshot.files).forEach((type) => extension.append(option(type, type, local.extension === type)));
-      extension.addEventListener('change', () => { local.extension = extension.value; renderResults(); saveSessionUi(); });
+      extension.addEventListener('change', () => { local.extension = extension.value; requestFilter(); saveSessionUi(); });
       filterGrid.append(field('File type', extension));
       filterGrid.append(field('Glob', inputControl(local.glob, '*.ts, !**/test/**', (value) => local.glob = value)));
       filterGrid.append(field('Exclude directories', inputControl(local.excludeDirectories, 'dist, node_modules, **/test/**', (value) => local.excludeDirectories = value), 'wide'));
@@ -365,8 +388,8 @@ export function createWebviewHtml(webview: vscode.Webview): string {
 
     function visibleFiles() {
       if (!model.snapshot) return [];
-      // Deleted files remain in the aggregate totals but do not occupy tree or export space.
-      return model.snapshot.files.filter((file) => file.status !== 'deleted' && fileMatches(file));
+      const keys = new Set(model.visibleFileKeys || []);
+      return model.snapshot.files.filter((file) => keys.has(file.source + String.fromCharCode(0) + file.path));
     }
 
     function buildDirectoryTree(files) {
@@ -502,69 +525,6 @@ export function createWebviewHtml(webview: vscode.Webview): string {
 
     function fileExtensions(files) {
       return [...new Set(files.map((file) => { const match = /\\.[^/.]+$/.exec(file.path); return match ? match[0].toLowerCase() : '(no extension)'; }))].sort();
-    }
-
-    function fileMatches(file) {
-      if (local.scope !== 'all' && !(file.sources || [file.source]).includes(local.scope)) return false;
-      if (local.status !== 'all' && file.status !== local.status) return false;
-      const type = (/\\.[^/.]+$/.exec(file.path) || ['(no extension)'])[0].toLowerCase();
-      if (local.extension !== 'all' && type !== local.extension) return false;
-      if (!matchesGlob(file.path, local.glob)) return false;
-      if (matchesExcludedDirectory(file.path, local.excludeDirectories)) return false;
-      const query = splitQuery(local.query);
-      if (query.fileTerms.length && !query.fileTerms.every((term) => includes(file.path, term))) return false;
-      if (!query.text) return true;
-      return matchedLines(file).length > 0;
-    }
-
-    function matchedLines(file) {
-      const query = splitQuery(local.query).text;
-      if (!query) return file.lines;
-      let matcher;
-      try {
-        const expression = local.regex ? query : escapeRegex(query);
-        matcher = new RegExp(local.wholeWord ? '\\\\b(?:' + expression + ')\\\\b' : expression, local.caseSensitive ? '' : 'i');
-      } catch { return []; }
-      return file.lines.filter((line) => matcher.test(line.text));
-    }
-
-    function splitQuery(query) {
-      const fileTerms = [];
-      const text = query.replace(/(^|\\s)file:("[^"]+"|\\S+)/g, (_, prefix, term) => { fileTerms.push(term.replace(/^"|"$/g, '')); return prefix; }).trim();
-      return { text, fileTerms };
-    }
-
-    function includes(value, search) { return local.caseSensitive ? value.includes(search) : value.toLowerCase().includes(search.toLowerCase()); }
-    function escapeRegex(value) { return value.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&'); }
-
-    function matchesGlob(path, value) {
-      const patterns = value.split(',').map((pattern) => pattern.trim()).filter(Boolean);
-      const positives = patterns.filter((pattern) => !pattern.startsWith('!'));
-      const negatives = patterns.filter((pattern) => pattern.startsWith('!')).map((pattern) => pattern.slice(1));
-      if (negatives.some((pattern) => globTest(path, pattern))) return false;
-      return !positives.length || positives.some((pattern) => globTest(path, pattern));
-    }
-
-    function matchesExcludedDirectory(path, value) {
-      const directories = path.split('/').slice(0, -1);
-      return value.split(',').map((term) => term.trim().replace(/^!/, '').replace(/^\\/+|\\/+$/g, '')).filter(Boolean).some((term) => {
-        if (term.includes('*') || term.includes('?')) return globTest(path, term.endsWith('/**') ? term : term + '/**');
-        if (term.includes('/')) return path.startsWith(term + '/');
-        return directories.includes(term);
-      });
-    }
-
-    function globTest(path, pattern) {
-      let expression = '^';
-      for (let i = 0; i < pattern.length; i += 1) {
-        const char = pattern[i];
-        if (char === '*' && pattern[i + 1] === '*') {
-          if (pattern[i + 2] === '/') { expression += '(?:.*/)?'; i += 2; } else { expression += '.*'; i += 1; }
-        } else if (char === '*') expression += '[^/]*';
-        else if (char === '?') expression += '[^/]';
-        else { const globMeta = '|\\\\{}()[]^\$+?.'; expression += globMeta.includes(char) ? '\\\\' + char : char; }
-      }
-      try { return new RegExp(expression + '$', local.caseSensitive ? '' : 'i').test(path); } catch { return false; }
     }
 
     function findingsForFile(path) { return model.snapshot.reviewer.findings.filter((finding) => finding.file === path); }

@@ -2,7 +2,7 @@
   "name": "branch-diff-explorer",
   "displayName": "Branch Diff Explorer",
   "description": "Search and review only the changes in your Git branch.",
-  "version": "0.1.20",
+  "version": "0.1.21",
   "publisher": "local",
   "license": "MIT",
   "repository": {
@@ -26,7 +26,11 @@
   "activationEvents": [
     "onStartupFinished",
     "onView:branchDiffExplorer.view",
-    "onCommand:branchDiffExplorer.open"
+    "onCommand:branchDiffExplorer.open",
+    "onCommand:branchDiffExplorer.mcpSetup",
+    "onCommand:branchDiffExplorer.copyCodexMcpConfig",
+    "onCommand:branchDiffExplorer.copyClaudeMcpConfig",
+    "onCommand:branchDiffExplorer.testMcp"
   ],
   "main": "./dist/extension.js",
   "icon": "media/icon.png",
@@ -65,6 +69,22 @@
       {
         "command": "branchDiffExplorer.openSettings",
         "title": "Branch Diff Explorer: Open Settings"
+      },
+      {
+        "command": "branchDiffExplorer.mcpSetup",
+        "title": "Branch Diff Explorer: MCP Setup"
+      },
+      {
+        "command": "branchDiffExplorer.copyCodexMcpConfig",
+        "title": "Branch Diff Explorer: Copy Codex MCP Configuration"
+      },
+      {
+        "command": "branchDiffExplorer.copyClaudeMcpConfig",
+        "title": "Branch Diff Explorer: Copy Claude Code MCP Configuration"
+      },
+      {
+        "command": "branchDiffExplorer.testMcp",
+        "title": "Branch Diff Explorer: Test MCP Server"
       }
     ],
     "keybindings": [
@@ -109,6 +129,11 @@
           "maximum": 600000,
           "scope": "resource",
           "description": "Time limit, in milliseconds, for a Git command. Use 0 to allow the command to run without a time limit."
+        },
+        "branchDiffExplorer.mcpNodeCommand": {
+          "type": "string",
+          "default": "node",
+          "description": "Node.js 18+ executable used to start and test the bundled local MCP server. Set an absolute executable path when node is not on PATH."
         }
       }
     },
@@ -123,16 +148,20 @@
     }
   },
   "scripts": {
-    "build": "tsc --project tsconfig.json --sourceMap",
+    "build": "tsc --project tsconfig.json --sourceMap && npm run build:mcp",
+    "build:mcp": "esbuild src/mcp-server.ts --bundle --platform=node --format=cjs --target=node18 --outfile=dist/mcp-server.js --sourcemap",
     "watch": "tsc --project tsconfig.json --sourceMap --watch",
     "check": "tsc --noEmit",
     "test": "vitest run",
+    "test:mcp": "npm run build && node scripts/mcp-smoke.mjs",
     "package": "npm run build && ./node_modules/.bin/vsce package --no-dependencies"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@types/node": "^22.10.2",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.28.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }

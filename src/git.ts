@@ -669,6 +669,15 @@ export class GitRepository {
     return this.run(['show', `${ref}:${path}`]);
   }
 
+  /** Full base-to-working-tree patch for one repository-relative path. */
+  async filePatchFromBase(baseBranch: string, path: string): Promise<string> {
+    const mergeBase = await this.comparisonBase(baseBranch);
+    return this.run([
+      'diff', '--no-color', '--no-ext-diff', '--find-renames=40%', '--patch',
+      mergeBase, '--', path,
+    ]);
+  }
+
   /** The common ancestor used by Git's three-dot branch comparison. */
   async comparisonBase(baseBranch: string): Promise<string> {
     return (await this.run(['merge-base', baseBranch, 'HEAD'])).trim();

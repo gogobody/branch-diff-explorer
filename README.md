@@ -46,6 +46,10 @@ features.
 - Export every file currently visible after filtering to a selected directory.
   Exports preserve the repository directory tree, append `.diff` to each source
   filename, and contain standard unified diff markers and hunks.
+- Expose saved sessions and their live filtered Git data to local AI clients
+  through a bundled, read-only STDIO MCP server. MCP uses the same author,
+  search, status, extension, glob, excluded-directory, and deleted-file rules
+  as the tree and export action.
 - Right-click any changed file to open it, open its diff, reveal it in the OS
   file manager, or copy its relative path, absolute path, file name, or URI.
   Right-click a directory to reveal it in Explorer or the OS, search within it,
@@ -77,9 +81,56 @@ features.
    also links to these settings.
 7. Use the **Export filtered diffs** button (`⇩`) in the header, select a target
    directory, and confirm before overwriting any existing exported `.diff` files.
+8. Use **MCP** in the header to copy a Codex or Claude Code configuration, or to
+   run the local MCP self-test. The server requires Node.js 18 or newer; set
+   **MCP: Node Command** if `node` is not on PATH.
+
+## AI access through MCP
+
+The extension copies its bundled MCP runtime to stable VS Code storage and
+keeps a workspace-specific state file synchronized with all saved sessions.
+The server recalculates Git changes when an AI client calls it; exported diff
+files and an open VS Code window are not required after configuration.
+
+Available read-only tools:
+
+- `list_diff_sessions`
+- `get_diff_summary`
+- `list_diff_files`
+- `get_filtered_diff`
+- `get_branch_diff`
+- `read_file_context`
+- `list_matching_commits`
+- `search_changes`
+
+Diff and source responses are line-paginated. Follow `nextCursor` or
+`nextStartLine` instead of requesting a complete large branch at once.
+`get_filtered_diff` respects the selected author or commit; `get_branch_diff`
+returns the complete merge-base-to-working-tree patch for the same visible
+path. `read_file_context` can return the current, HEAD, merge-base, or
+author-before version of a file.
+
+For Codex, copy the generated TOML into `~/.codex/config.toml` or a trusted
+project's `.codex/config.toml`, then restart the local Codex client. Codex
+desktop, CLI, and IDE clients support local STDIO MCP servers and share this
+configuration. See the [official Codex MCP documentation](https://developers.openai.com/codex/mcp).
+
+For Claude Code, merge the generated JSON object into the project's `.mcp.json`
+and reconnect the client. The generated configuration contains only a local
+Node command, the bundled server path, and the workspace state-file path.
+
+Suggested prompt:
+
+```text
+Use the branch-diff-explorer MCP. List sessions, summarize the active session,
+then page through its filtered files. Review get_filtered_diff for the selected
+author and use read_file_context for full source context. Use get_branch_diff
+only when you need to compare the author's patch with the complete branch change.
+```
 
 The extension invokes only your local `git` executable and does not send source
 code, commit metadata, reviewer findings, or search queries over the network.
+The MCP server is local STDIO and exposes no listening network port.
 
 ## Development
 
