@@ -15,6 +15,10 @@ describe('Branch Diff Explorer webview', () => {
     expect(html).toContain('file-stats');
     expect(html).not.toContain('file-actions');
     expect(html).toContain('Exclude directories');
+    expect(html).toContain("element('button', 'help-button', '?')");
+    expect(html).toContain("helpButton.setAttribute('aria-expanded', 'false')");
+    expect(html).toContain('** spans folders');
+    expect(html).toContain('**/*.ts, !**/*.test.ts');
     expect(html).toContain('Author contains');
     expect(html).toContain('Copy absolute path');
     expect(html).toContain('Reveal in file manager');

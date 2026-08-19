@@ -38,6 +38,11 @@ export function createWebviewHtml(webview: vscode.Webview): string {
     .field { min-width: 0; }
     .field.wide { grid-column: 1 / -1; }
     label { display: block; color: var(--vscode-descriptionForeground); margin: 0 0 3px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .35px; }
+    .field-label { align-items: center; display: flex; gap: 4px; margin: 0 0 3px; }
+    .field-label label { margin: 0; }
+    .help-button { align-items: center; background: transparent; border: 1px solid var(--vscode-descriptionForeground); border-radius: 50%; color: var(--vscode-descriptionForeground); display: inline-flex; font-size: 9px; font-weight: 700; height: 14px; justify-content: center; line-height: 12px; padding: 0; width: 14px; }
+    .help-button:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-foreground); }
+    .field-help { background: var(--vscode-textBlockQuote-background); border-left: 2px solid var(--vscode-focusBorder); color: var(--vscode-descriptionForeground); font-size: 10px; line-height: 1.4; margin-top: 4px; padding: 5px 6px; }
     .author-keyword { font-family: var(--vscode-editor-font-family); }
     .session-control { display: flex; gap: 3px; }
     .session-control select { flex: 1; }
@@ -200,10 +205,27 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       return node;
     }
 
-    function field(labelText, control, extraClass) {
+    function field(labelText, control, extraClass, helpText) {
       const wrapper = element('div', 'field' + (extraClass ? ' ' + extraClass : ''));
       const label = element('label', '', labelText);
-      wrapper.append(label, control);
+      if (!helpText) {
+        wrapper.append(label, control);
+        return wrapper;
+      }
+      const labelRow = element('div', 'field-label');
+      const helpButton = element('button', 'help-button', '?');
+      helpButton.title = helpText;
+      helpButton.setAttribute('aria-label', 'Help for ' + labelText);
+      helpButton.setAttribute('aria-expanded', 'false');
+      const helpDetails = element('div', 'field-help', helpText);
+      helpDetails.hidden = true;
+      helpButton.addEventListener('click', () => {
+        const expanded = helpButton.getAttribute('aria-expanded') === 'true';
+        helpButton.setAttribute('aria-expanded', String(!expanded));
+        helpDetails.hidden = expanded;
+      });
+      labelRow.append(label, helpButton);
+      wrapper.append(labelRow, control, helpDetails);
       return wrapper;
     }
 
@@ -359,7 +381,7 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       fileExtensions(snapshot.files).forEach((type) => extension.append(option(type, type, local.extension === type)));
       extension.addEventListener('change', () => { local.extension = extension.value; requestFilter(); saveSessionUi(); });
       filterGrid.append(field('File type', extension));
-      filterGrid.append(field('Glob', inputControl(local.glob, '*.ts, !**/test/**', (value) => local.glob = value)));
+      filterGrid.append(field('Glob', inputControl(local.glob, '**/*.ts, !**/test/**', (value) => local.glob = value), '', 'Comma-separated repository-relative patterns. * matches within one folder, ** spans folders, ? matches one character, and ! excludes. Examples: **/*.ts · **/*.c, **/*.h · **/*.ts, !**/*.test.ts'));
       filterGrid.append(field('Exclude directories', inputControl(local.excludeDirectories, 'dist, node_modules, **/test/**', (value) => local.excludeDirectories = value), 'wide'));
       filters.append(filterGrid);
       const options = element('div', 'option-row');
