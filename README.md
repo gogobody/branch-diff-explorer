@@ -43,6 +43,9 @@ features.
   histories.
 - Exclude directories by name, relative directory path, or glob (`dist`,
   `src/generated`, `**/test/**`) without changing the base Git diff.
+- Export every file currently visible after filtering to a selected directory.
+  Exports preserve the repository directory tree, append `.diff` to each source
+  filename, and contain standard unified diff markers and hunks.
 - Right-click any changed file to open it, open its diff, reveal it in the OS
   file manager, or copy its relative path, absolute path, file name, or URI.
   Right-click a directory to reveal it in Explorer or the OS, search within it,
@@ -72,6 +75,8 @@ features.
 6. Open **Branch Diff Explorer: Open Settings** to configure the base branch,
    preview line limit, Git output buffer, or Git command timeout. The error UI
    also links to these settings.
+7. Use the **Export filtered diffs** button (`⇩`) in the header, select a target
+   directory, and confirm before overwriting any existing exported `.diff` files.
 
 The extension invokes only your local `git` executable and does not send source
 code, commit metadata, reviewer findings, or search queries over the network.

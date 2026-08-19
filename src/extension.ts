@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
+import { diffExportContent, diffExportRelativePath } from './export';
 import { GitRepository, revertPatchWithDiagnostics, type GitRunOptions } from './git';
 import { createWebviewHtml } from './webview';
 import type { ChangedFile, DiffSnapshot, FindingSeverity, SnapshotRequest } from './types';
@@ -42,12 +43,13 @@ interface ExplorerViewState {
 }
 
 interface ViewMessage {
-  type: 'ready' | 'refresh' | 'switchSession' | 'createSession' | 'renameSession' | 'deleteSession' | 'saveSession' | 'openFile' | 'openPanel' | 'openSettings' | 'openPath' | 'copyPath' | 'revealPath' | 'revealInExplorer' | 'findInFolder' | 'toggleFavorite' | 'toggleReviewed' | 'triage' | 'info';
+  type: 'ready' | 'refresh' | 'switchSession' | 'createSession' | 'renameSession' | 'deleteSession' | 'saveSession' | 'openFile' | 'openPanel' | 'exportDiffs' | 'openSettings' | 'openPath' | 'copyPath' | 'revealPath' | 'revealInExplorer' | 'findInFolder' | 'toggleFavorite' | 'toggleReviewed' | 'triage' | 'info';
   request?: ViewRequest;
   sessionId?: string;
   ui?: SessionUiConfig;
   path?: string;
   source?: ChangedFile['source'];
+  files?: Array<{ path: string; source: ChangedFile['source'] }>;
   line?: number;
   findingId?: string;
   decision?: 'agreed' | 'skipped';
@@ -147,6 +149,14 @@ class ExplorerWebview implements vscode.Disposable {
         return;
       case 'openPanel':
         await this.controller.openPanel(this.request);
+        return;
+      case 'exportDiffs':
+        if (!this.snapshot || !message.files?.length) return;
+        try {
+          await this.controller.exportDiffs(this.snapshot, message.files);
+        } catch (error) {
+          void vscode.window.showErrorMessage(`Branch Diff Explorer: Unable to export diffs: ${errorMessage(error)}`);
+        }
         return;
       case 'openSettings':
         await this.controller.openSettings();
@@ -461,6 +471,74 @@ class ExplorerController implements vscode.Disposable {
       ? `${file.path} (${revision.slice(0, 8)})`
       : `${file.path} (${snapshot.repository.baseBranch}…working tree)`;
     await vscode.commands.executeCommand('vscode.diff', left, right, title, { preview: true });
+  }
+
+  async exportDiffs(
+    snapshot: DiffSnapshot,
+    requestedFiles: Array<{ path: string; source: ChangedFile['source'] }>,
+  ): Promise<void> {
+    const requested = new Set(requestedFiles.map((file) => `${file.source}\u0000${file.path}`));
+    const files = snapshot.files.filter((file) => requested.has(`${file.source}\u0000${file.path}`));
+    if (!files.length) {
+      void vscode.window.showInformationMessage('No filtered diff files are available to export.');
+      return;
+    }
+    const selected = await vscode.window.showOpenDialog({
+      title: `Export ${files.length} filtered diff file${files.length === 1 ? '' : 's'}`,
+      openLabel: 'Export Here',
+      canSelectFiles: false,
+      canSelectFolders: true,
+      canSelectMany: false,
+    });
+    const destination = selected?.[0];
+    if (!destination) return;
+
+    const exports = files.flatMap((file) => {
+      const relativePath = diffExportRelativePath(file.path);
+      if (!relativePath) return [];
+      const parts = relativePath.split('/');
+      return [{ file, relativePath, target: vscode.Uri.joinPath(destination, ...parts) }];
+    });
+    if (!exports.length) throw new Error('No safe repository-relative paths were found.');
+
+    let existingCount = 0;
+    for (const item of exports) {
+      try {
+        await vscode.workspace.fs.stat(item.target);
+        existingCount += 1;
+      } catch {
+        // A missing target is expected for a new export.
+      }
+    }
+    if (existingCount) {
+      const choice = await vscode.window.showWarningMessage(
+        `${existingCount} exported diff file${existingCount === 1 ? '' : 's'} already exist in the selected directory.`,
+        { modal: true, detail: 'Only matching .diff files will be overwritten; other files are left unchanged.' },
+        'Overwrite',
+      );
+      if (choice !== 'Overwrite') return;
+    }
+
+    await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: `Exporting ${exports.length} filtered diffs`,
+      cancellable: false,
+    }, async (progress) => {
+      const increment = 100 / exports.length;
+      for (const item of exports) {
+        const parts = item.relativePath.split('/');
+        const parent = parts.length > 1 ? vscode.Uri.joinPath(destination, ...parts.slice(0, -1)) : destination;
+        await vscode.workspace.fs.createDirectory(parent);
+        await vscode.workspace.fs.writeFile(item.target, Buffer.from(diffExportContent(item.file.patch), 'utf8'));
+        progress.report({ increment, message: item.file.path });
+      }
+    });
+
+    const action = await vscode.window.showInformationMessage(
+      `Exported ${exports.length} filtered diff file${exports.length === 1 ? '' : 's'} with the repository directory structure.`,
+      'Reveal Folder',
+    );
+    if (action === 'Reveal Folder') await vscode.commands.executeCommand('revealFileInOS', destination);
   }
 
   async openPath(repositoryPath: string | undefined, path: string, line?: number): Promise<void> {

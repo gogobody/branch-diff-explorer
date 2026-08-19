@@ -24,6 +24,9 @@ describe('Branch Diff Explorer webview', () => {
     expect(html).toContain("file.status !== 'deleted'");
     expect(html).toContain('summary-totals');
     expect(html).toContain('Open Settings');
+    expect(html).toContain('Export filtered diffs');
+    expect(html).toContain("type: 'exportDiffs'");
+    expect(html).toContain('const files = visibleFiles()');
     expect(html).toContain('renderTreeRoot(tree, buildDirectoryTree(files))');
     expect(html).not.toContain('model.snapshot.repository.name, \'\', 0');
   });

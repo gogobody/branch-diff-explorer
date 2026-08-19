@@ -289,9 +289,16 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       const buttons = element('div', 'icon-buttons');
       const refresh = element('button', 'icon', '↻');
       refresh.title = 'Refresh'; refresh.setAttribute('aria-label', 'Refresh Git diff'); refresh.addEventListener('click', postRefresh);
+      const exportDiffs = element('button', 'icon', '⇩');
+      exportDiffs.title = 'Export filtered diffs'; exportDiffs.setAttribute('aria-label', 'Export filtered diffs');
+      exportDiffs.addEventListener('click', () => {
+        const files = visibleFiles();
+        if (!files.length) return;
+        vscode.postMessage({ type: 'exportDiffs', files: files.map((file) => ({ path: file.path, source: file.source })) });
+      });
       const panel = element('button', 'icon', '↗');
       panel.title = 'Open in editor panel'; panel.setAttribute('aria-label', 'Open in editor panel'); panel.addEventListener('click', () => vscode.postMessage({ type: 'openPanel', request: remote }));
-      buttons.append(refresh, panel); titleRow.append(titleWrap, buttons); header.append(titleRow); app.append(header);
+      buttons.append(exportDiffs, refresh, panel); titleRow.append(titleWrap, buttons); header.append(titleRow); app.append(header);
 
       const controls = element('section', 'controls');
       const primary = element('div', 'grid');
@@ -335,8 +342,7 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       const container = document.getElementById('results');
       if (!container || !model.snapshot) return;
       container.replaceChildren();
-      // Deleted files remain in the aggregate totals but do not occupy tree space.
-      const files = model.snapshot.files.filter((file) => file.status !== 'deleted' && fileMatches(file));
+      const files = visibleFiles();
       const summary = element('div', 'summary');
       const left = element('span'); left.append(element('strong', '', formatCount(model.snapshot.totals.files)), document.createTextNode(' files'));
       if (files.length !== model.snapshot.files.length) left.append(element('span', 'summary-filtered', formatCount(files.length) + ' shown'));
@@ -355,6 +361,12 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       const tree = element('div', 'tree');
       renderTreeRoot(tree, buildDirectoryTree(files));
       container.append(tree);
+    }
+
+    function visibleFiles() {
+      if (!model.snapshot) return [];
+      // Deleted files remain in the aggregate totals but do not occupy tree or export space.
+      return model.snapshot.files.filter((file) => file.status !== 'deleted' && fileMatches(file));
     }
 
     function buildDirectoryTree(files) {
