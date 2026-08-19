@@ -92,24 +92,6 @@ keeps a workspace-specific state file synchronized with all saved sessions.
 The server recalculates Git changes when an AI client calls it; exported diff
 files and an open VS Code window are not required after configuration.
 
-Available read-only tools:
-
-- `list_diff_sessions`
-- `get_diff_summary`
-- `list_diff_files`
-- `get_filtered_diff`
-- `get_branch_diff`
-- `read_file_context`
-- `list_matching_commits`
-- `search_changes`
-
-Diff and source responses are line-paginated. Follow `nextCursor` or
-`nextStartLine` instead of requesting a complete large branch at once.
-`get_filtered_diff` respects the selected author or commit; `get_branch_diff`
-returns the complete merge-base-to-working-tree patch for the same visible
-path. `read_file_context` can return the current, HEAD, merge-base, or
-author-before version of a file.
-
 For Codex, copy the generated TOML into `~/.codex/config.toml` or a trusted
 project's `.codex/config.toml`, then restart the local Codex client. Codex
 desktop, CLI, and IDE clients support local STDIO MCP servers and share this
@@ -119,14 +101,124 @@ For Claude Code, merge the generated JSON object into the project's `.mcp.json`
 and reconnect the client. The generated configuration contains only a local
 Node command, the bundled server path, and the workspace state-file path.
 
-Suggested prompt:
+### Recommended MCP workflow
+
+MCP clients can select tools from a natural-language request. For reliable,
+token-efficient reviews, ask the client to follow this sequence:
+
+1. Call `list_diff_sessions` to find the active or requested session.
+2. Call `get_diff_summary` to confirm the repository, branch, comparison base,
+   author or commit scope, filters, and visible totals.
+3. Page through `list_diff_files` to obtain the exact set of files shown in the
+   directory tree.
+4. Read `get_filtered_diff` for each file being reviewed.
+5. Use `read_file_context` when a patch does not contain enough surrounding
+   source code.
+6. Use `get_branch_diff` only when the complete all-author branch change is
+   required for comparison.
+
+### MCP tool reference
+
+All tools are read-only and accept an optional `sessionId`. When it is omitted,
+the active Branch Diff Explorer session is used.
+
+| Tool | Purpose | Important inputs |
+| --- | --- | --- |
+| `list_diff_sessions` | List saved sessions, the active session, repository paths, branch bases, author/commit scopes, and UI filters. | No inputs. |
+| `get_diff_summary` | Return branch metadata, scope totals, directory-tree-visible totals, hidden-file count, and filter semantics. | `sessionId`; `refresh: true` forces a fresh Git calculation. |
+| `list_diff_files` | Page through unique, non-deleted files that remain after all session filters. | `pathPrefix`, `cursor`, `limit` (maximum 200). |
+| `get_filtered_diff` | Read the author- or commit-filtered patch for one visible file. | Exact `path` from `list_diff_files`, `startLine`, `maxLines` (maximum 5,000). |
+| `get_branch_diff` | Read the complete merge-base-to-working-tree patch for one visible file, including every author. | Exact `path`, `startLine`, `maxLines`. |
+| `read_file_context` | Read full source context from the working tree, HEAD, merge base, or the left side of an author-filtered diff. | Exact `path`, `side`, `startLine`, `maxLines`. |
+| `list_matching_commits` | Page through commits selected by Author contains, selected authors, or a single-commit scope. | `cursor`, `limit` (maximum 200). |
+| `search_changes` | Search changed lines while retaining the session's file, glob, extension, status, and excluded-directory filters. | `query`, `caseSensitive`, `regex`, `wholeWord`, `cursor`, `limit`. |
+
+`get_diff_summary` reports two intentionally different totals:
+
+- `scopeTotals` describes the complete author or commit scope before UI file
+  filters.
+- `visibleTotals` describes exactly the non-deleted files available through
+  `list_diff_files`, export, and the directory tree after all UI filters.
+
+With **Author contains**, `get_filtered_diff.text` contains only matching-author
+patches. Its per-file `additions` and `deletions` remain the final
+base-to-working-tree totals for that matching path; they are not accumulated
+from every author commit. `get_branch_diff` deliberately includes other
+authors' changes, so it must not replace `get_filtered_diff` during an
+author-scoped review.
+
+`read_file_context.side` accepts:
+
+- `current` (default): current working-tree contents.
+- `head`: the file at `HEAD`.
+- `base`: the file at the Git merge base used by the comparison.
+- `author_before`: current contents with the selected author's patch reverted,
+  matching the left side of the VS Code author-filtered diff. This side is only
+  available in author-filtered sessions.
+
+### Pagination examples
+
+File and commit lists return `nextCursor`. Pass it back until it is absent:
+
+```json
+{
+  "sessionId": "session-id",
+  "pathPrefix": "src/services",
+  "cursor": 0,
+  "limit": 100
+}
+```
+
+Diff and source tools return `nextStartLine`. Text pages default to 800 lines
+and support up to 5,000 lines per call:
+
+```json
+{
+  "sessionId": "session-id",
+  "path": "src/services/example.ts",
+  "startLine": 1,
+  "maxLines": 1000
+}
+```
+
+Always use the exact repository-relative path returned by `list_diff_files`.
+
+### Suggested review prompt
 
 ```text
-Use the branch-diff-explorer MCP. List sessions, summarize the active session,
-then page through its filtered files. Review get_filtered_diff for the selected
-author and use read_file_context for full source context. Use get_branch_diff
-only when you need to compare the author's patch with the complete branch change.
+Use the branch-diff-explorer MCP. First list the saved diff sessions and
+summarize the active session. Page through every file returned by
+list_diff_files. Review get_filtered_diff so the review remains limited to the
+selected author or commit, and use read_file_context when full source context is
+needed. Use get_branch_diff only to compare the selected-author patch with the
+complete branch change. Report findings with severity, file path, relevant
+lines, reasoning, and a suggested fix.
 ```
+
+Useful focused requests include:
+
+```text
+Search the active filtered changes for glfs_bdev_get_route_stats, then read the
+matching file's filtered diff and its current and author_before source context.
+```
+
+```text
+Review only files under source/services/spdk. Use pathPrefix when listing files,
+follow every pagination cursor, and do not review changes from other authors.
+```
+
+### MCP troubleshooting
+
+- If the server is missing, restart the Codex or Claude client and inspect its
+  MCP server list. In Codex, use `/mcp`.
+- If results appear stale, call `get_diff_summary` with `refresh: true`.
+- If a path is rejected, retrieve it again from `list_diff_files` and pass the
+  exact returned path.
+- If a response is truncated, follow `nextCursor` or `nextStartLine` instead of
+  assuming the result is complete.
+- `author_before` requires an author-filtered session.
+- Binary files, symbolic-link targets, and source files larger than 32 MB are
+  not returned as source context.
 
 The extension invokes only your local `git` executable and does not send source
 code, commit metadata, reviewer findings, or search queries over the network.
