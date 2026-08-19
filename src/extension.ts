@@ -484,7 +484,10 @@ class ExplorerController implements vscode.Disposable {
       // other author's lines as well.
       const reverted = revertPatchWithDiagnostics(rightContent, file.patch);
       const left = this.content.put(reverted.content, leftTarget);
-      const right = this.content.put(rightContent, rightTarget);
+      // Keep only the synthetic author-before side virtual. The current file
+      // must use its real workspace URI so the right-hand diff editor remains
+      // editable and saves directly back to the working tree.
+      const right = await this.currentFileOrEmpty(rightTarget);
       const unresolved = reverted.unmatchedBlocks
         ? ` · ${reverted.unmatchedBlocks} overwritten or moved change${reverted.unmatchedBlocks === 1 ? '' : 's'}`
         : '';

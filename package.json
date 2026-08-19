@@ -2,7 +2,7 @@
   "name": "branch-diff-explorer",
   "displayName": "Branch Diff Explorer",
   "description": "Search and review only the changes in your Git branch.",
-  "version": "0.1.29",
+  "version": "0.1.30",
   "publisher": "local",
   "license": "MIT",
   "repository": {
