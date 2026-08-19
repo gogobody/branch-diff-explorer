@@ -22,12 +22,14 @@ export function createWebviewHtml(webview: vscode.Webview): string {
     #app { min-height: 100vh; }
     .header { position: sticky; top: 0; z-index: 2; padding: 10px 10px 9px; background: var(--vscode-sideBar-background); border-bottom: 1px solid var(--vscode-sideBar-border, var(--vscode-panel-border)); box-shadow: 0 1px 0 color-mix(in srgb, var(--vscode-editor-background) 45%, transparent); }
     .title-row, .summary, .chips, .icon-buttons, .option-row { display: flex; align-items: center; gap: 6px; }
-    .title-row { align-items: flex-start; justify-content: space-between; }
+    .title-row { align-items: flex-start; justify-content: space-between; min-width: 0; }
+    .title-wrap { flex: 1 1 auto; min-width: 0; }
     .title { font-size: 13px; font-weight: 700; letter-spacing: .15px; }
-    .branch-context { align-items: center; color: var(--vscode-descriptionForeground); display: flex; font-family: var(--vscode-editor-font-family); font-size: 10px; gap: 4px; margin-top: 4px; max-width: 250px; overflow: hidden; white-space: nowrap; }
-    .branch-ref { background: var(--vscode-badge-background); border-radius: 2px; color: var(--vscode-badge-foreground); overflow: hidden; padding: 1px 4px; text-overflow: ellipsis; }
+    .branch-context { align-items: center; color: var(--vscode-descriptionForeground); display: flex; font-family: var(--vscode-editor-font-family); font-size: 10px; gap: 4px; margin-top: 4px; max-width: 100%; min-width: 0; overflow: hidden; white-space: nowrap; }
+    .branch-ref { background: var(--vscode-badge-background); border-radius: 2px; color: var(--vscode-badge-foreground); min-width: 0; overflow: hidden; padding: 1px 4px; text-overflow: ellipsis; }
     .branch-arrow { color: var(--vscode-descriptionForeground); }
     .icon { border: 0; background: transparent; border-radius: 3px; padding: 3px 5px; font-size: 16px; line-height: 18px; color: var(--vscode-icon-foreground); }
+    .icon-buttons { flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
     .mcp-icon { font-size: 9px; font-weight: 800; letter-spacing: .2px; }
     .controls { padding: 10px 10px 7px; border-bottom: 1px solid var(--vscode-sideBar-border, var(--vscode-panel-border)); }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
@@ -99,6 +101,15 @@ export function createWebviewHtml(webview: vscode.Webview): string {
     .context-menu button:hover { background: var(--vscode-menu-selectionBackground); color: var(--vscode-menu-selectionForeground); }
     .context-menu .menu-separator { border-top: 1px solid var(--vscode-menu-separatorBackground, var(--vscode-widget-border)); margin: 4px 2px; }
     @media (max-width: 360px) { .grid, .filterbar .grid { grid-template-columns: 1fr; } }
+    @media (max-width: 300px) {
+      .title-row { flex-wrap: wrap; row-gap: 4px; }
+      .title-wrap, .icon-buttons { flex-basis: 100%; width: 100%; }
+    }
+    @media (max-width: 190px) {
+      .header { padding-left: 6px; padding-right: 6px; }
+      .icon-buttons { gap: 2px; }
+      .icon { padding-left: 3px; padding-right: 3px; }
+    }
   </style>
 </head>
 <body>
@@ -302,7 +313,7 @@ export function createWebviewHtml(webview: vscode.Webview): string {
 
       const header = element('section', 'header');
       const titleRow = element('div', 'title-row');
-      const titleWrap = element('div');
+      const titleWrap = element('div', 'title-wrap');
       const branchContext = element('div', 'branch-context');
       branchContext.append(element('span', 'branch-ref', snapshot.repository.branch), element('span', 'branch-arrow', '→'), element('span', 'branch-ref', snapshot.repository.baseBranch));
       titleWrap.append(element('div', 'title', 'Branch Diff Explorer'), branchContext);
