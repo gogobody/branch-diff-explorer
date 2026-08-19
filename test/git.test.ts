@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { applyOverallLineTotals, applyOverallPatch, authorId, coalesceChangedFiles, DEFAULT_GIT_MAX_OUTPUT_BYTES, GitRepository, parsePatch, revertPatchFromContent, revertPatchWithDiagnostics, runGit } from '../src/git';
+import { applyEffectiveAuthorLineTotals, applyOverallLineTotals, applyOverallPatch, authorId, coalesceChangedFiles, DEFAULT_GIT_MAX_OUTPUT_BYTES, GitRepository, parsePatch, revertPatchFromContent, revertPatchWithDiagnostics, runGit } from '../src/git';
 
 const temporaryDirectories: string[] = [];
 
@@ -365,6 +365,36 @@ rename to src/new.ts
   });
 });
 
+describe('applyEffectiveAuthorLineTotals', () => {
+  it('counts the final highlighted author diff instead of commits or the whole branch', async () => {
+    const repositoryPath = await mkdtemp(join(tmpdir(), 'branch-diff-explorer-author-totals-'));
+    temporaryDirectories.push(repositoryPath);
+    await writeFile(join(repositoryPath, 'example.ts'), 'final\nother author\n');
+    const newestAuthorChange = parsePatch(`diff --git a/example.ts b/example.ts
+@@ -1 +1 @@
+-first
++final
+`, 'author')[0];
+    const oldestAuthorChange = parsePatch(`diff --git a/example.ts b/example.ts
+@@ -1 +1 @@
+-base
++first
+`, 'author')[0];
+    const authorFiles = coalesceChangedFiles([newestAuthorChange, oldestAuthorChange]);
+    const branchFiles = parsePatch(`diff --git a/example.ts b/example.ts
+@@ -1 +1,2 @@
+-base
++final
++other author
+`, 'committed');
+
+    expect(authorFiles[0]).toMatchObject({ additions: 2, deletions: 2 });
+    expect(applyOverallLineTotals(authorFiles, branchFiles)[0]).toMatchObject({ additions: 2, deletions: 1 });
+    await expect(applyEffectiveAuthorLineTotals(repositoryPath, authorFiles, branchFiles))
+      .resolves.toMatchObject([{ additions: 1, deletions: 1 }]);
+  });
+});
+
 describe('GitRepository author filtering', () => {
   it('returns an empty, usable snapshot for a repository without commits', async () => {
     const repositoryPath = await mkdtemp(join(tmpdir(), 'branch-diff-explorer-empty-'));
@@ -427,7 +457,7 @@ describe('GitRepository author filtering', () => {
       authorIds: [authorId('Bob', 'bob@example.test')],
     });
     expect(bobChanges.files).toHaveLength(2);
-    expect(bobChanges.files.find((file) => file.path === 'src/bob.ts')).toMatchObject({ source: 'author', sources: ['author'], commitHash: bobUpdateHash, additions: 2, deletions: 0 });
+    expect(bobChanges.files.find((file) => file.path === 'src/bob.ts')).toMatchObject({ source: 'author', sources: ['author'], commitHash: bobUpdateHash, additions: 1, deletions: 0 });
     expect(bobChanges.files.find((file) => file.path === 'readme.md')).toMatchObject({ source: 'author', additions: 1, deletions: 0 });
     expect(bobChanges.files.find((file) => file.path === 'src/bob.ts')?.patch).not.toContain('aliceFollowUp');
     expect(bobChanges.notice).toContain('Uncommitted work is excluded');

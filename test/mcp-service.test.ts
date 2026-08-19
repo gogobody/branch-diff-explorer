@@ -71,14 +71,14 @@ describe('Branch Diff MCP service', () => {
     };
     expect(summary.session.authorKeyword).toBe('alice@example');
     expect(summary.visibleTotals.files).toBe(1);
-    expect(summary.visibleTotals.additions).toBe(2);
+    expect(summary.visibleTotals.additions).toBe(1);
 
     const listed = await service.listFiles(undefined, { limit: 1 }) as {
       total: number;
       files: Array<{ path: string; additions: number }>;
     };
     expect(listed.total).toBe(1);
-    expect(listed.files).toEqual([expect.objectContaining({ path: 'src/example.ts', additions: 2 })]);
+    expect(listed.files).toEqual([expect.objectContaining({ path: 'src/example.ts', additions: 1 })]);
 
     const filtered = await service.getFilteredDiff(undefined, 'src/example.ts', { maxLines: 200 }) as { text: string };
     expect(filtered.text).toContain('+export const aliceLine = true;');

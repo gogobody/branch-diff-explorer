@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process';
-import { basename } from 'node:path';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 import {
   type ChangedFile,
@@ -213,12 +215,100 @@ export function applyOverallLineTotals(scopeFiles: ChangedFile[], overallFiles: 
 }
 
 /**
+ * Makes author-mode tree statistics match the side-by-side editor. The left
+ * side is the current file with the selected author's surviving changes
+ * reverted; comparing that synthetic file with the current file avoids both
+ * per-commit double counting and branch-wide changes made by other authors.
+ */
+export async function applyEffectiveAuthorLineTotals(
+  rootPath: string,
+  scopeFiles: ChangedFile[],
+  overallFiles: ChangedFile[],
+  options: GitRunOptions = {},
+): Promise<ChangedFile[]> {
+  const files = applyOverallLineTotals(scopeFiles, overallFiles);
+  if (!files.length) return [];
+
+  const temporaryRoot = await mkdtemp(join(tmpdir(), 'branch-diff-explorer-author-stats-'));
+  const beforeRoot = join(temporaryRoot, 'before');
+  const afterRoot = join(temporaryRoot, 'after');
+  await Promise.all([mkdir(beforeRoot), mkdir(afterRoot)]);
+  try {
+    await Promise.all(files.map(async (file, index) => {
+      const current = await readWorkingTreeTextOrEmpty(join(rootPath, file.path));
+      const before = revertPatchWithDiagnostics(current, file.patch).content;
+      const name = `${String(index).padStart(8, '0')}.txt`;
+      await Promise.all([
+        writeFile(join(beforeRoot, name), before, 'utf8'),
+        writeFile(join(afterRoot, name), current, 'utf8'),
+      ]);
+    }));
+
+    const output = await runNoIndexNumstat(rootPath, beforeRoot, afterRoot, options);
+    const totals = parseIndexedNumstat(output);
+    return files.map((file, index) => ({
+      ...file,
+      additions: totals.get(index)?.additions ?? 0,
+      deletions: totals.get(index)?.deletions ?? 0,
+    }));
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+}
+
+/**
  * Git reports a final rename with both its old and new path. Match either one
  * so an author's earlier edit remains visible after somebody renames the file.
  */
 function matchingScopedFile(scopeFiles: ChangedFile[], overall: ChangedFile): ChangedFile | undefined {
   const finalPaths = new Set([overall.path, overall.previousPath].filter((path): path is string => Boolean(path)));
   return scopeFiles.find((file) => [file.path, file.previousPath].some((path) => path !== undefined && finalPaths.has(path)));
+}
+
+async function readWorkingTreeTextOrEmpty(path: string): Promise<string> {
+  try {
+    return await readFile(path, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
+    throw error;
+  }
+}
+
+async function runNoIndexNumstat(
+  cwd: string,
+  beforeRoot: string,
+  afterRoot: string,
+  options: GitRunOptions,
+): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync('git', [
+      'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--numstat', '--no-index',
+      '--', beforeRoot, afterRoot,
+    ], {
+      cwd,
+      encoding: 'utf8',
+      maxBuffer: options.maxBuffer ?? DEFAULT_GIT_MAX_OUTPUT_BYTES,
+      timeout: options.timeout ?? 0,
+      windowsHide: true,
+    });
+    return stdout;
+  } catch (error) {
+    const details = error as { code?: number | string; stdout?: string; stderr?: string; message?: string };
+    // git diff --no-index exits with 1 when differences were found.
+    if (Number(details.code) === 1) return details.stdout ?? '';
+    throw new GitError(details.stderr?.trim() || details.message || 'Unable to calculate author diff statistics.');
+  }
+}
+
+function parseIndexedNumstat(output: string): Map<number, { additions: number; deletions: number }> {
+  const result = new Map<number, { additions: number; deletions: number }>();
+  for (const row of output.split(/\r?\n/)) {
+    const [added, deleted, path = ''] = row.split('\t');
+    const index = /(\d{8})\.txt$/.exec(path)?.[1];
+    if (index === undefined || added === '-' || deleted === '-') continue;
+    result.set(Number(index), { additions: Number(added), deletions: Number(deleted) });
+  }
+  return result;
 }
 
 interface PatchHunk {
@@ -770,7 +860,7 @@ export class GitRepository {
     if (hasHead && !activeCommit) {
       const overallFiles = parsePatch(await this.workingTreePatch(baseBranch), 'committed');
       files = activeAuthorIds.length || activeAuthorKeyword
-        ? applyOverallLineTotals(files, overallFiles)
+        ? await applyEffectiveAuthorLineTotals(this.rootPath, files, overallFiles, this.options)
         : applyOverallPatch(files, overallFiles);
     }
 
