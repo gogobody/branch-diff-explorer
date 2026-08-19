@@ -4,7 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import * as z from 'zod/v4';
 import { BranchDiffMcpService } from './mcp-service';
 
-const SERVER_VERSION = '0.1.24';
+const SERVER_VERSION = '0.1.25';
 const READ_ONLY = {
   readOnlyHint: true,
   destructiveHint: false,

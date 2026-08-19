@@ -21,16 +21,18 @@ export function createWebviewHtml(webview: vscode.Webview): string {
     select, input { min-width: 0; width: 100%; padding: 5px 6px; }
     #app { min-height: 100vh; }
     .header { position: sticky; top: 0; z-index: 2; padding: 10px 10px 9px; background: var(--vscode-sideBar-background); border-bottom: 1px solid var(--vscode-sideBar-border, var(--vscode-panel-border)); box-shadow: 0 1px 0 color-mix(in srgb, var(--vscode-editor-background) 45%, transparent); }
-    .title-row, .summary, .chips, .icon-buttons, .option-row { display: flex; align-items: center; gap: 6px; }
+    .title-row, .summary, .chips, .header-tools, .option-row { display: flex; align-items: center; gap: 6px; }
     .title-row { align-items: flex-start; justify-content: space-between; min-width: 0; }
     .title-wrap { flex: 1 1 auto; min-width: 0; }
     .title { font-size: 13px; font-weight: 700; letter-spacing: .15px; }
     .branch-context { align-items: center; color: var(--vscode-descriptionForeground); display: flex; font-family: var(--vscode-editor-font-family); font-size: 10px; gap: 4px; margin-top: 4px; max-width: 100%; min-width: 0; overflow: hidden; white-space: nowrap; }
     .branch-ref { background: var(--vscode-badge-background); border-radius: 2px; color: var(--vscode-badge-foreground); min-width: 0; overflow: hidden; padding: 1px 4px; text-overflow: ellipsis; }
     .branch-arrow { color: var(--vscode-descriptionForeground); }
+    .header-tools { gap: 3px; margin-top: 7px; min-height: 24px; min-width: 0; }
+    .header-spacer { flex: 1 1 auto; }
+    .mcp-action { background: var(--vscode-button-secondaryBackground); border: 0; color: var(--vscode-button-secondaryForeground); flex: 0 0 auto; font-size: 10px; font-weight: 700; letter-spacing: .2px; line-height: 18px; padding: 2px 8px; }
+    .mcp-action:hover { background: var(--vscode-button-secondaryHoverBackground); }
     .icon { border: 0; background: transparent; border-radius: 3px; padding: 3px 5px; font-size: 16px; line-height: 18px; color: var(--vscode-icon-foreground); }
-    .icon-buttons { flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
-    .mcp-icon { font-size: 9px; font-weight: 800; letter-spacing: .2px; }
     .controls { padding: 10px 10px 7px; border-bottom: 1px solid var(--vscode-sideBar-border, var(--vscode-panel-border)); }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
     .field { min-width: 0; }
@@ -101,13 +103,10 @@ export function createWebviewHtml(webview: vscode.Webview): string {
     .context-menu button:hover { background: var(--vscode-menu-selectionBackground); color: var(--vscode-menu-selectionForeground); }
     .context-menu .menu-separator { border-top: 1px solid var(--vscode-menu-separatorBackground, var(--vscode-widget-border)); margin: 4px 2px; }
     @media (max-width: 360px) { .grid, .filterbar .grid { grid-template-columns: 1fr; } }
-    @media (max-width: 300px) {
-      .title-row { flex-wrap: wrap; row-gap: 4px; }
-      .title-wrap, .icon-buttons { flex-basis: 100%; width: 100%; }
-    }
     @media (max-width: 190px) {
       .header { padding-left: 6px; padding-right: 6px; }
-      .icon-buttons { gap: 2px; }
+      .header-tools { gap: 1px; }
+      .mcp-action { padding-left: 5px; padding-right: 5px; }
       .icon { padding-left: 3px; padding-right: 3px; }
     }
   </style>
@@ -317,7 +316,7 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       const branchContext = element('div', 'branch-context');
       branchContext.append(element('span', 'branch-ref', snapshot.repository.branch), element('span', 'branch-arrow', '→'), element('span', 'branch-ref', snapshot.repository.baseBranch));
       titleWrap.append(element('div', 'title', 'Branch Diff Explorer'), branchContext);
-      const buttons = element('div', 'icon-buttons');
+      const tools = element('div', 'header-tools');
       const refresh = element('button', 'icon', '↻');
       refresh.title = 'Refresh'; refresh.setAttribute('aria-label', 'Refresh Git diff'); refresh.addEventListener('click', postRefresh);
       const exportDiffs = element('button', 'icon', '⇩');
@@ -327,12 +326,13 @@ export function createWebviewHtml(webview: vscode.Webview): string {
         if (!files.length) return;
         vscode.postMessage({ type: 'exportDiffs', files: files.map((file) => ({ path: file.path, source: file.source })) });
       });
-      const mcp = element('button', 'icon mcp-icon', 'MCP');
+      const mcp = element('button', 'mcp-action', 'MCP Setup');
       mcp.title = 'Configure AI access through MCP'; mcp.setAttribute('aria-label', 'Configure Branch Diff MCP');
       mcp.addEventListener('click', () => vscode.postMessage({ type: 'showMcpSetup' }));
       const panel = element('button', 'icon', '↗');
       panel.title = 'Open in editor panel'; panel.setAttribute('aria-label', 'Open in editor panel'); panel.addEventListener('click', () => vscode.postMessage({ type: 'openPanel', request: remote }));
-      buttons.append(mcp, exportDiffs, refresh, panel); titleRow.append(titleWrap, buttons); header.append(titleRow); app.append(header);
+      tools.append(mcp, element('span', 'header-spacer'), exportDiffs, refresh, panel);
+      titleRow.append(titleWrap); header.append(titleRow, tools); app.append(header);
 
       const controls = element('section', 'controls');
       const primary = element('div', 'grid');

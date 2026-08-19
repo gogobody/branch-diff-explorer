@@ -29,8 +29,10 @@ describe('Branch Diff Explorer webview', () => {
     expect(html).toContain("type: 'exportDiffs'");
     expect(html).toContain("type: 'showMcpSetup'");
     expect(html).toContain("element('div', 'title-wrap')");
-    expect(html).toContain('@media (max-width: 300px)');
-    expect(html).toContain('.icon-buttons { flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }');
+    expect(html).toContain("element('div', 'header-tools')");
+    expect(html).toContain("element('button', 'mcp-action', 'MCP Setup')");
+    expect(html).toContain("tools.append(mcp, element('span', 'header-spacer'), exportDiffs, refresh, panel)");
+    expect(html).not.toContain('icon mcp-icon');
     expect(html).toContain('const files = visibleFiles()');
     expect(html).toContain('renderTreeRoot(tree, buildDirectoryTree(files))');
     expect(html).not.toContain('model.snapshot.repository.name, \'\', 0');
