@@ -7,7 +7,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://example.invalid/branch-diff-explorer"
+    "url": "https://github.com/gogobody/branch-diff-explorer.git"
+  },
+  "homepage": "https://github.com/gogobody/branch-diff-explorer#readme",
+  "bugs": {
+    "url": "https://github.com/gogobody/branch-diff-explorer/issues"
   },
   "engines": {
     "vscode": "^1.85.0"
@@ -148,13 +152,14 @@
     }
   },
   "scripts": {
+    "vscode:prepublish": "npm run build",
     "build": "tsc --project tsconfig.json --sourceMap && npm run build:mcp",
     "build:mcp": "esbuild src/mcp-server.ts --bundle --platform=node --format=cjs --target=node18 --outfile=dist/mcp-server.js --sourcemap",
     "watch": "tsc --project tsconfig.json --sourceMap --watch",
     "check": "tsc --noEmit",
     "test": "vitest run",
     "test:mcp": "npm run build && node scripts/mcp-smoke.mjs",
-    "package": "npm run build && ./node_modules/.bin/vsce package --no-dependencies"
+    "package": "./node_modules/.bin/vsce package --no-dependencies"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
