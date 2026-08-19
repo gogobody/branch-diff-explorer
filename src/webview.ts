@@ -52,6 +52,16 @@ export function createWebviewHtml(webview: vscode.Webview): string {
     .filterbar .option-row { padding-top: 6px; flex-wrap: wrap; }
     .check { color: var(--vscode-descriptionForeground); display: inline-flex; align-items: center; gap: 3px; font-size: 11px; user-select: none; }
     .check input { appearance: auto; width: auto; margin: 0; }
+    .exclude-editor { background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); border-radius: 3px; overflow: hidden; }
+    .exclude-summary { align-items: center; color: var(--vscode-descriptionForeground); display: flex; font-size: 10px; justify-content: space-between; padding: 4px 5px 2px; }
+    .exclude-clear { background: transparent; border: 0; color: var(--vscode-descriptionForeground); font-size: 10px; padding: 1px 3px; }
+    .exclude-list { max-height: 86px; overflow-y: auto; padding: 2px 4px 4px; }
+    .exclude-entry { align-items: center; background: var(--vscode-badge-background); border-radius: 3px; display: flex; margin-top: 2px; min-width: 0; }
+    .exclude-entry input { background: transparent; border: 0; color: var(--vscode-badge-foreground); flex: 1 1 auto; font-family: var(--vscode-editor-font-family); font-size: 10px; min-width: 0; padding: 3px 5px; }
+    .exclude-remove { background: transparent; border: 0; color: var(--vscode-badge-foreground); flex: 0 0 auto; font-size: 13px; line-height: 16px; padding: 1px 5px; }
+    .exclude-add { border-top: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); display: flex; }
+    .exclude-add input { background: transparent; border: 0; flex: 1 1 auto; font-family: var(--vscode-editor-font-family); font-size: 10px; min-width: 0; }
+    .exclude-add button { background: transparent; border: 0; flex: 0 0 auto; font-size: 15px; min-width: 28px; }
     .summary { justify-content: space-between; padding: 7px 10px; color: var(--vscode-descriptionForeground); font-size: 11px; }
     .summary strong { color: var(--vscode-foreground); font-weight: 600; }
     .summary-totals { align-items: center; display: flex; font-family: var(--vscode-editor-font-family); gap: 7px; white-space: nowrap; }
@@ -316,6 +326,87 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       return input;
     }
 
+    function excludePathsControl() {
+      const terms = exclusionTerms();
+      const editor = element('div', 'exclude-editor');
+      if (terms.length) {
+        const summary = element('div', 'exclude-summary');
+        summary.append(element('span', '', terms.length + (terms.length === 1 ? ' path excluded' : ' paths excluded')));
+        const clear = element('button', 'exclude-clear', 'Clear all');
+        clear.title = 'Remove all excluded paths';
+        clear.addEventListener('click', () => setExclusionTerms([]));
+        summary.append(clear); editor.append(summary);
+        const list = element('div', 'exclude-list');
+        terms.forEach((term, index) => {
+          const row = element('div', 'exclude-entry');
+          const input = element('input');
+          input.value = term;
+          input.title = term;
+          input.setAttribute('aria-label', 'Edit excluded path ' + term);
+          input.addEventListener('change', () => {
+            const updated = terms.slice();
+            updated[index] = input.value;
+            setExclusionTerms(updated);
+          });
+          input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') input.blur();
+            if (event.key === 'Escape') { input.value = term; input.blur(); }
+          });
+          const remove = element('button', 'exclude-remove', '×');
+          remove.title = 'Remove ' + term;
+          remove.setAttribute('aria-label', 'Remove excluded path ' + term);
+          remove.addEventListener('click', () => setExclusionTerms(terms.filter((_value, itemIndex) => itemIndex !== index)));
+          row.append(input, remove); list.append(row);
+        });
+        editor.append(list);
+      }
+      const add = element('div', 'exclude-add');
+      const input = element('input');
+      input.placeholder = 'Add file, folder, or glob…';
+      input.setAttribute('aria-label', 'Add excluded path');
+      const commit = () => {
+        const additions = input.value.split(',').map(normalizeExclusion).filter(Boolean);
+        if (additions.length) setExclusionTerms([...terms, ...additions]);
+      };
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') { event.preventDefault(); commit(); }
+      });
+      const addButton = element('button', '', '+');
+      addButton.title = 'Add excluded path'; addButton.setAttribute('aria-label', 'Add excluded path');
+      addButton.addEventListener('click', commit);
+      add.append(input, addButton); editor.append(add);
+      return editor;
+    }
+
+    function exclusionTerms() {
+      return [...new Set(String(local.excludeDirectories || '').split(',').map(normalizeExclusion).filter(Boolean))];
+    }
+
+    function normalizeExclusion(value) {
+      let normalized = String(value || '').trim().replaceAll(String.fromCharCode(92), '/');
+      while (normalized.startsWith('./')) normalized = normalized.slice(2);
+      while (normalized.startsWith('/')) normalized = normalized.slice(1);
+      while (normalized.endsWith('/')) normalized = normalized.slice(0, -1);
+      return normalized;
+    }
+
+    function setExclusionTerms(values) {
+      const unique = [];
+      values.map(normalizeExclusion).filter(Boolean).forEach((value) => {
+        if (!unique.includes(value)) unique.push(value);
+      });
+      local.excludeDirectories = unique.join(', ');
+      render();
+      requestFilter();
+      saveSessionUi();
+    }
+
+    function addExcludedPath(path) {
+      const normalized = normalizeExclusion(path);
+      if (!normalized) return;
+      setExclusionTerms([...exclusionTerms(), normalized]);
+    }
+
     function checkbox(labelText, value, callback) {
       const label = element('label', 'check');
       const input = element('input');
@@ -390,7 +481,7 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       extension.addEventListener('change', () => { local.extension = extension.value; requestFilter(); saveSessionUi(); });
       filterGrid.append(field('File type', extension));
       filterGrid.append(field('Glob', inputControl(local.glob, '**/*.ts, !**/test/**', (value) => local.glob = value), '', 'Comma-separated repository-relative patterns. * matches within one folder, ** spans folders, ? matches one character, and ! excludes. Examples: **/*.ts · **/*.c, **/*.h · **/*.ts, !**/*.test.ts'));
-      filterGrid.append(field('Exclude directories', inputControl(local.excludeDirectories, 'dist, node_modules, **/test/**', (value) => local.excludeDirectories = value), 'wide'));
+      filterGrid.append(field('Exclude paths', excludePathsControl(), 'wide', 'Exclude repository-relative files, folders, or glob patterns. A simple name matches that file or folder name anywhere. Right-click a tree item to add it here. Entries are saved with this session and can be edited or removed individually.'));
       filters.append(filterGrid);
       const options = element('div', 'option-row');
       options.append(checkbox('Match case', local.caseSensitive, (value) => local.caseSensitive = value));
@@ -521,14 +612,13 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       addAction('Reveal in file manager', () => vscode.postMessage({ type: 'revealPath', path: file.path }));
       addAction(model.snapshot.favorites.includes(file.path) ? 'Remove from favorites' : 'Add to favorites', () => vscode.postMessage({ type: 'toggleFavorite', path: file.path }));
       addAction(model.snapshot.reviewedFiles.includes(file.path) ? 'Mark as not reviewed' : 'Mark as reviewed', () => vscode.postMessage({ type: 'toggleReviewed', path: file.path }));
+      addAction('Exclude this file', () => addExcludedPath(file.path));
       separator();
       addAction('Copy relative path', () => vscode.postMessage({ type: 'copyPath', path: file.path, copyKind: 'relative' }));
       addAction('Copy absolute path', () => vscode.postMessage({ type: 'copyPath', path: file.path, copyKind: 'absolute' }));
       addAction('Copy file name', () => vscode.postMessage({ type: 'copyPath', path: file.path, copyKind: 'name' }));
       addAction('Copy file URI', () => vscode.postMessage({ type: 'copyPath', path: file.path, copyKind: 'uri' }));
-      menu.style.left = Math.max(4, Math.min(event.clientX, window.innerWidth - 210)) + 'px';
-      menu.style.top = Math.max(4, Math.min(event.clientY, window.innerHeight - 250)) + 'px';
-      document.body.append(menu);
+      placeContextMenu(menu, event);
       contextMenu = menu;
     }
 
@@ -545,16 +635,23 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       addAction('Reveal in Explorer', () => vscode.postMessage({ type: 'revealInExplorer', path }));
       addAction('Reveal in file manager', () => vscode.postMessage({ type: 'revealPath', path }));
       addAction('Find in folder', () => vscode.postMessage({ type: 'findInFolder', path }));
+      addAction('Exclude this folder', () => addExcludedPath(path));
       separator();
       addAction('Copy relative path', () => vscode.postMessage({ type: 'copyPath', path, copyKind: 'relative' }));
       addAction('Copy absolute path', () => vscode.postMessage({ type: 'copyPath', path, copyKind: 'absolute' }));
       addAction('Copy folder name', () => vscode.postMessage({ type: 'copyPath', path, copyKind: 'name' }));
       addAction('Copy folder URI', () => vscode.postMessage({ type: 'copyPath', path, copyKind: 'uri' }));
       menu.setAttribute('aria-label', 'Folder actions for ' + name);
-      menu.style.left = Math.max(4, Math.min(event.clientX, window.innerWidth - 210)) + 'px';
-      menu.style.top = Math.max(4, Math.min(event.clientY, window.innerHeight - 250)) + 'px';
-      document.body.append(menu);
+      placeContextMenu(menu, event);
       contextMenu = menu;
+    }
+
+    function placeContextMenu(menu, event) {
+      menu.style.visibility = 'hidden';
+      document.body.append(menu);
+      menu.style.left = Math.max(4, Math.min(event.clientX, window.innerWidth - menu.offsetWidth - 4)) + 'px';
+      menu.style.top = Math.max(4, Math.min(event.clientY, window.innerHeight - menu.offsetHeight - 4)) + 'px';
+      menu.style.visibility = 'visible';
     }
 
     function hideContextMenu() {

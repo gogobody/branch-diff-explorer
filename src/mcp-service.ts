@@ -72,7 +72,7 @@ export class BranchDiffMcpService {
       behindBase: current.snapshot.behindBase,
       notice: current.snapshot.notice,
       filterSemantics: current.snapshot.activeAuthorIds.length || current.snapshot.activeAuthorKeyword
-        ? 'Filtered patches contain only matching-author commits; file totals are the final base-to-working-tree totals for matching paths.'
+        ? 'Filtered patches contain only matching-author commits; file totals match the final author-before-to-working-tree diff shown by the editor.'
         : current.snapshot.activeCommit
           ? 'Filtered patches contain only the selected commit.'
           : 'Filtered patches contain the complete base-to-working-tree changes plus staged and unstaged changes.',

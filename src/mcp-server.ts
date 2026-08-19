@@ -4,7 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import * as z from 'zod/v4';
 import { BranchDiffMcpService } from './mcp-service';
 
-const SERVER_VERSION = '0.1.30';
+const SERVER_VERSION = '0.1.31';
 const READ_ONLY = {
   readOnlyHint: true,
   destructiveHint: false,
@@ -39,7 +39,7 @@ export function createBranchDiffMcpServer(service: BranchDiffMcpService): McpSer
 
   server.registerTool('list_diff_files', {
     title: 'List filtered diff files',
-    description: 'Page through unique, non-deleted files visible in a session after author, search, status, extension, glob, and excluded-directory filters.',
+    description: 'Page through unique, non-deleted files visible in a session after author, search, status, extension, glob, and excluded-path filters.',
     inputSchema: {
       sessionId: z.string().optional().describe('Saved session ID. Omit to use the active session.'),
       pathPrefix: z.string().optional().describe('Optional repository-relative directory prefix.'),
@@ -104,7 +104,7 @@ export function createBranchDiffMcpServer(service: BranchDiffMcpService): McpSer
 
   server.registerTool('search_changes', {
     title: 'Search changed lines',
-    description: 'Search complete filtered patch lines while preserving the session file/status/glob/excluded-directory filters.',
+    description: 'Search complete filtered patch lines while preserving the session file/status/glob/excluded-path filters.',
     inputSchema: {
       sessionId: z.string().optional().describe('Saved session ID. Omit to use the active session.'),
       query: z.string().min(1).describe('Changed-line search text or regular expression.'),

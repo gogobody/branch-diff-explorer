@@ -134,11 +134,17 @@ export function matchesGlob(path: string, value: string, caseSensitive = false):
 export function matchesExcludedDirectory(path: string, value: string, caseSensitive = false): boolean {
   const comparedPath = caseSensitive ? path : path.toLocaleLowerCase();
   const directories = comparedPath.split('/').slice(0, -1);
+  const fileName = comparedPath.split('/').pop() ?? comparedPath;
   return commaTerms(value).map((term) => term.replace(/^!/, '').replace(/^\/+|\/+$/g, '')).filter(Boolean).some((term) => {
-    if (term.includes('*') || term.includes('?')) return globTest(path, term.endsWith('/**') ? term : `${term}/**`, caseSensitive);
+    if (term.includes('*') || term.includes('?')) {
+      return globTest(path, term, caseSensitive)
+        || globTest(path, term.endsWith('/**') ? term : `${term}/**`, caseSensitive);
+    }
     const comparedTerm = caseSensitive ? term : term.toLocaleLowerCase();
-    if (comparedTerm.includes('/')) return comparedPath.startsWith(`${comparedTerm}/`);
-    return directories.includes(comparedTerm);
+    if (comparedTerm.includes('/')) {
+      return comparedPath === comparedTerm || comparedPath.startsWith(`${comparedTerm}/`);
+    }
+    return fileName === comparedTerm || directories.includes(comparedTerm);
   });
 }
 

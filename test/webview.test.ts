@@ -14,7 +14,12 @@ describe('Branch Diff Explorer webview', () => {
     expect(html).toContain('New session');
     expect(html).toContain('file-stats');
     expect(html).not.toContain('file-actions');
-    expect(html).toContain('Exclude directories');
+    expect(html).toContain('Exclude paths');
+    expect(html).toContain('Exclude this file');
+    expect(html).toContain('Exclude this folder');
+    expect(html).toContain('exclude-editor');
+    expect(html).toContain('setExclusionTerms');
+    expect(html).toContain('paths excluded');
     expect(html).toContain("element('button', 'help-button', '?')");
     expect(html).toContain("helpButton.setAttribute('aria-expanded', 'false')");
     expect(html).toContain('** spans folders');

@@ -41,6 +41,19 @@ describe('shared file filtering', () => {
     expect(result.map((item) => item.path)).toEqual(['src/author.ts']);
   });
 
+  it('excludes exact files, directories, and file globs from the same path list', () => {
+    const files = [
+      file('src/keep.ts'),
+      file('src/generated/skip.ts'),
+      file('src/specific.ts'),
+      file('test/snapshot.test.ts'),
+    ];
+    const result = visibleChangedFiles(files, {
+      excludeDirectories: 'src/generated, src/specific.ts, **/*.test.ts',
+    });
+    expect(result.map((item) => item.path)).toEqual(['src/keep.ts']);
+  });
+
   it('supports regex, whole-word, and case-sensitive matching without throwing on invalid expressions', () => {
     const changed = file('src/example.ts', {
       lines: [

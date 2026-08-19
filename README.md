@@ -32,8 +32,9 @@ features.
   signatures as anchors before matching common braces and whitespace.
   If an author edit has been overwritten or moved beyond safe matching, the
   diff title calls that out instead of silently hiding it.
-- Author-filtered rows use final `base → working tree` line totals for each
-  matching path, rather than adding up edits from every matching commit.
+- Author-filtered rows use the final `author-before → working tree` line totals
+  shown by the editor, rather than adding every matching commit or including
+  changes from other authors.
 - For a file absent from the base branch, the complete current file remains
   visible, while only lines from the selected author are highlighted.
 - Go to Definition, Declaration, Type Definition, and Implementation from a
@@ -45,19 +46,20 @@ features.
 - Author filtering scans the complete branch range instead of silently stopping
   at 250 commits. Matching patches are loaded in bounded batches for large
   histories.
-- Exclude directories by name, relative directory path, or glob (`dist`,
-  `src/generated`, `**/test/**`) without changing the base Git diff.
+- Exclude files, directories, or globs (`src/generated`, `src/legacy.c`,
+  `**/test/**`) without changing the base Git diff. Exclusions use a compact,
+  scrollable editor where each entry can be changed or removed independently.
 - Export every file currently visible after filtering to a selected directory.
   Exports preserve the repository directory tree, append `.diff` to each source
   filename, and contain standard unified diff markers and hunks.
 - Expose saved sessions and their live filtered Git data to local AI clients
   through a bundled, read-only STDIO MCP server. MCP uses the same author,
-  search, status, extension, glob, excluded-directory, and deleted-file rules
+  search, status, extension, glob, excluded-path, and deleted-file rules
   as the tree and export action.
-- Right-click any changed file to open it, open its diff, reveal it in the OS
-  file manager, or copy its relative path, absolute path, file name, or URI.
-  Right-click a directory to reveal it in Explorer or the OS, search within it,
-  or copy its relative path, absolute path, name, or URI.
+- Right-click any changed file to open it, open its diff, exclude it, reveal it
+  in the OS file manager, or copy its relative path, absolute path, file name,
+  or URI. Right-click a directory to exclude the whole directory, reveal it in
+  Explorer or the OS, search within it, or copy its path, name, or URI.
 - Reviewer cockpit compatibility: reads `.diffly/findings.json`, shows briefing,
   findings and missing-work items, supports Agree/Skip triage, and decorates
   flagged lines in open editors.
@@ -66,8 +68,8 @@ features.
 - Supports multi-root workspaces and remembers the selected repository during a
   session.
 - Create unlimited named sessions. Each session saves its workspace folder, base
-  branch, author/commit scope, search options, file filters, and excluded
-  directories independently in VS Code workspace storage.
+  branch, author/commit scope, search options, file filters, and excluded paths
+  independently in VS Code workspace storage.
 
 ## Use
 
@@ -135,7 +137,7 @@ the active Branch Diff Explorer session is used.
 | `get_branch_diff` | Read the complete merge-base-to-working-tree patch for one visible file, including every author. | Exact `path`, `startLine`, `maxLines`. |
 | `read_file_context` | Read full source context from the working tree, HEAD, merge base, or the left side of an author-filtered diff. | Exact `path`, `side`, `startLine`, `maxLines`. |
 | `list_matching_commits` | Page through commits selected by Author contains, selected authors, or a single-commit scope. | `cursor`, `limit` (maximum 200). |
-| `search_changes` | Search changed lines while retaining the session's file, glob, extension, status, and excluded-directory filters. | `query`, `caseSensitive`, `regex`, `wholeWord`, `cursor`, `limit`. |
+| `search_changes` | Search changed lines while retaining the session's file, glob, extension, status, and excluded-path filters. | `query`, `caseSensitive`, `regex`, `wholeWord`, `cursor`, `limit`. |
 
 `get_diff_summary` reports two intentionally different totals:
 
@@ -145,9 +147,9 @@ the active Branch Diff Explorer session is used.
   `list_diff_files`, export, and the directory tree after all UI filters.
 
 With **Author contains**, `get_filtered_diff.text` contains only matching-author
-patches. Its per-file `additions` and `deletions` remain the final
-base-to-working-tree totals for that matching path; they are not accumulated
-from every author commit. `get_branch_diff` deliberately includes other
+patches. Its per-file `additions` and `deletions` match the final visible
+author-before-to-working-tree diff; they neither accumulate repeated commits
+nor include other authors. `get_branch_diff` deliberately includes other
 authors' changes, so it must not replace `get_filtered_diff` during an
 author-scoped review.
 
@@ -268,8 +270,9 @@ Branch Diff Explorer 是一个完全在本地运行的 VS Code 插件，用于�
   后续重命名文件，作者高亮仍会尽量保持准确。较大的编辑块会优先使用函数签名
   等唯一代码行作为锚点，再匹配常见的大括号和空白行。如果某项作者改动已经被
   覆盖或移动到无法安全定位的位置，Diff 标题会明确提示，而不会静默遗漏。
-- Author 模式下文件行数使用对应路径最终的 `base → working tree` Diff 统计，
-  不会把匹配作者每次提交的修改重复累加。
+- Author 模式下文件行数使用编辑器实际显示的最终
+  `author-before → working tree` Diff 统计，既不会重复累加作者的多次提交，也
+  不会混入其他作者的改动。
 - 如果文件在基线分支中不存在，Diff 会显示完整当前文件，但只高亮选定作者添加
   的代码行。
 - 可以从虚拟 Git Diff 窗口执行 Go to Definition、Declaration、Type Definition
@@ -279,23 +282,25 @@ Branch Diff Explorer 是一个完全在本地运行的 VS Code 插件，用于�
   关键字筛选提交。
 - 作者过滤会扫描完整分支提交范围，不会在 250 个提交处静默停止；大型提交历史
   会按有界批次读取匹配补丁。
-- 支持按目录名称、仓库相对路径或 Glob 排除目录，例如 `dist`、
-  `src/generated`、`**/test/**`，不会改变底层基线 Diff。
+- 支持排除文件、目录或 Glob，例如 `src/generated`、`src/legacy.c`、
+  `**/test/**`，不会改变底层基线 Diff。排除项使用紧凑的可滚动编辑器，每一项
+  都能单独修改或删除。
 - 可以把当前过滤后可见的全部文件导出到指定目录。导出会保留仓库目录结构，
   在源码文件名后添加 `.diff`，内容包含标准 Unified Diff 标记和 Hunk。
 - 通过内置的只读 STDIO MCP Server，把已保存会话及其实时过滤后的 Git 数据
   提供给本地 AI 客户端。MCP 与目录树和导出功能使用相同的作者、搜索、状态、
-  扩展名、Glob、排除目录和删除文件规则。
-- 文件右键菜单支持打开文件、打开 Diff、在系统文件管理器中显示，以及复制相对
-  路径、绝对路径、文件名或 URI。目录右键菜单支持在 Explorer 或系统文件管理器
-  中显示、在目录内搜索，以及复制相对路径、绝对路径、目录名或 URI。
+  扩展名、Glob、排除路径和删除文件规则。
+- 文件右键菜单支持打开文件、打开 Diff、加入排除、在系统文件管理器中显示，
+  以及复制相对路径、绝对路径、文件名或 URI。目录右键菜单支持排除整个目录、
+  在 Explorer 或系统文件管理器中显示、在目录内搜索，以及复制路径、目录名或
+  URI。
 - 兼容 Reviewer Cockpit：读取 `.diffly/findings.json`，显示审查摘要、问题和
   缺失项，支持 Agree/Skip 分类，并在已打开编辑器中装饰问题行。
 - 当基线分支领先当前分支时给出提示，并在 Git 状态或
   `.diffly/findings.json` 发生变化时刷新。
 - 支持 Multi-root Workspace，并在会话中记住所选仓库。
 - 可以创建任意数量的命名会话。每个会话分别保存 Workspace folder、基线分支、
-  Author/Commit 范围、搜索选项、文件过滤器和排除目录。
+  Author/Commit 范围、搜索选项、文件过滤器和排除路径。
 
 ### 使用方法
 
@@ -357,7 +362,7 @@ Explorer 当前活动会话。
 | `get_branch_diff` | 读取一个可见文件从 merge-base 到工作区的完整补丁，包含所有作者。 | 精确 `path`、`startLine`、`maxLines`。 |
 | `read_file_context` | 从工作区、HEAD、merge base 或 Author Diff 左侧读取完整源码上下文。 | 精确 `path`、`side`、`startLine`、`maxLines`。 |
 | `list_matching_commits` | 分页列出 Author contains、选定作者或 Single commit 范围内的提交。 | `cursor`、`limit`（最大 200）。 |
-| `search_changes` | 搜索改动行，同时保留会话的文件、Glob、扩展名、状态和排除目录过滤。 | `query`、`caseSensitive`、`regex`、`wholeWord`、`cursor`、`limit`。 |
+| `search_changes` | 搜索改动行，同时保留会话的文件、Glob、扩展名、状态和排除路径过滤。 | `query`、`caseSensitive`、`regex`、`wholeWord`、`cursor`、`limit`。 |
 
 `get_diff_summary` 会返回两组含义不同的汇总：
 
@@ -366,8 +371,9 @@ Explorer 当前活动会话。
   `list_diff_files`、导出和目录树访问的汇总。
 
 启用 **Author contains** 时，`get_filtered_diff.text` 只包含匹配作者的补丁；
-但其中每个文件的 `additions` 和 `deletions` 仍表示对应路径最终的
-`base → working tree` Diff 行数，不会累加作者的每次提交。
+其中每个文件的 `additions` 和 `deletions` 与最终可见的
+`author-before → working tree` Diff 一致，既不会累加作者的多次提交，也不会
+混入其他作者。
 `get_branch_diff` 会有意包含其他作者的改动，因此 Author 审查时不能用它替代
 `get_filtered_diff`。
 
