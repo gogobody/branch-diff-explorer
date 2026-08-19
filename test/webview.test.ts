@@ -19,6 +19,8 @@ describe('Branch Diff Explorer webview', () => {
     expect(html).toContain("helpButton.setAttribute('aria-expanded', 'false')");
     expect(html).toContain('** spans folders');
     expect(html).toContain('**/*.ts, !**/*.test.ts');
+    expect(html).toContain('Case-insensitive contains match against commit author name or email');
+    expect(html).toContain('Author mode disables Single commit and Git state');
     expect(html).toContain('Author contains');
     expect(html).toContain('Copy absolute path');
     expect(html).toContain('Reveal in file manager');

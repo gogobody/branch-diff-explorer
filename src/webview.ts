@@ -362,7 +362,7 @@ export function createWebviewHtml(webview: vscode.Webview): string {
       if (model.repositories.length > 1) primary.append(field('Workspace folder', selectRepository()));
       primary.append(field('Compare with', selectBase(snapshot)));
       primary.append(field('Single commit', selectCommit(snapshot)));
-      primary.append(field('Author contains', authorKeywordControl(), 'wide'));
+      primary.append(field('Author contains', authorKeywordControl(), 'wide', 'Case-insensitive contains match against commit author name or email. Only committed changes can match because staged and unstaged work has no commit author. Press Enter to apply. Author mode disables Single commit and Git state.'));
       primary.append(field('Search changed lines', inputControl(local.query, 'Search, or file:Button', (value) => local.query = value), 'wide'));
       controls.append(primary); app.append(controls);
 
