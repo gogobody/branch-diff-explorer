@@ -386,16 +386,76 @@ function separatedChangedLinePositions(lines: string[], block: PatchEditBlock): 
     positions.push(index);
     candidatesByLine.set(key, positions);
   }
+  const anchors = patienceLineAnchors(block.newLines, candidatesByLine);
   const positions: number[] = [];
-  let minimumIndex = start;
-  for (const expected of block.newLines) {
-    const candidates = candidatesByLine.get(normalizedLine(expected)) ?? [];
-    const position = candidates.find((candidate) => candidate >= minimumIndex);
-    if (position === undefined) continue;
-    positions.push(position);
-    minimumIndex = position + 1;
+  let previousExpectedIndex = -1;
+  let previousActualIndex = start - 1;
+  for (const anchor of [...anchors, { expectedIndex: block.newLines.length, actualIndex: end }]) {
+    let minimumIndex = previousActualIndex + 1;
+    for (let expectedIndex = previousExpectedIndex + 1; expectedIndex < anchor.expectedIndex; expectedIndex += 1) {
+      const candidates = candidatesByLine.get(normalizedLine(block.newLines[expectedIndex])) ?? [];
+      const position = candidates.find((candidate) => candidate >= minimumIndex && candidate < anchor.actualIndex);
+      if (position === undefined) continue;
+      positions.push(position);
+      minimumIndex = position + 1;
+    }
+    if (anchor.expectedIndex < block.newLines.length) positions.push(anchor.actualIndex);
+    previousExpectedIndex = anchor.expectedIndex;
+    previousActualIndex = anchor.actualIndex;
   }
   return positions;
+}
+
+interface LineAnchor {
+  expectedIndex: number;
+  actualIndex: number;
+}
+
+/**
+ * Finds unique lines shared by the historical edit and current file, then
+ * keeps their longest ordered sequence. Function signatures and uncommon
+ * statements become stable anchors, preventing generic braces from matching
+ * past them when earlier parts of a large hunk were removed later.
+ */
+function patienceLineAnchors(expected: string[], candidatesByLine: Map<string, number[]>): LineAnchor[] {
+  const expectedByLine = new Map<string, number[]>();
+  for (let index = 0; index < expected.length; index += 1) {
+    const key = normalizedLine(expected[index]);
+    const positions = expectedByLine.get(key) ?? [];
+    positions.push(index);
+    expectedByLine.set(key, positions);
+  }
+  const candidates: LineAnchor[] = [];
+  for (const [line, expectedPositions] of expectedByLine) {
+    const actualPositions = candidatesByLine.get(line) ?? [];
+    if (expectedPositions.length === 1 && actualPositions.length === 1) {
+      candidates.push({ expectedIndex: expectedPositions[0], actualIndex: actualPositions[0] });
+    }
+  }
+  candidates.sort((left, right) => left.expectedIndex - right.expectedIndex);
+  if (!candidates.length) return [];
+
+  const tails: number[] = [];
+  const previous = new Array<number>(candidates.length).fill(-1);
+  for (let index = 0; index < candidates.length; index += 1) {
+    let low = 0;
+    let high = tails.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (candidates[tails[middle]].actualIndex < candidates[index].actualIndex) low = middle + 1;
+      else high = middle;
+    }
+    if (low > 0) previous[index] = tails[low - 1];
+    tails[low] = index;
+  }
+
+  const result: LineAnchor[] = [];
+  let index = tails[tails.length - 1];
+  while (index >= 0) {
+    result.push(candidates[index]);
+    index = previous[index];
+  }
+  return result.reverse();
 }
 
 function fuzzySearchRange(lines: string[], block: PatchEditBlock): { start: number; end: number } {

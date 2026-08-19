@@ -24,7 +24,8 @@ features.
   highlighted changes while keeping the rest of the current file visible.
 - Author highlights remain accurate when another commit changes surrounding
   context, inserts inside pure additions or mixed replacement blocks, or
-  renames the file later.
+  renames the file later. Large edited blocks use unique lines such as function
+  signatures as anchors before matching common braces and whitespace.
   If an author edit has been overwritten or moved beyond safe matching, the
   diff title calls that out instead of silently hiding it.
 - Author-filtered rows use final `base → working tree` line totals for each

@@ -273,6 +273,33 @@ static int footer = 0;
     });
   });
 
+  it('anchors a unique function signature before matching generic lines in a large addition', () => {
+    const result = revertPatchWithDiagnostics(`{
+}
+void glfs_bdev_get_route_stats(void)
+{
+    selected_line();
+}
+`, `diff --git a/example.c b/example.c
+index 1234567..abcdef0 100644
+--- a/example.c
++++ b/example.c
+@@ -1,0 +1,10 @@
++removed_later_one();
++{
++}
++removed_later_two();
++{
++}
++void glfs_bdev_get_route_stats(void)
++{
++    selected_line();
++}
+`);
+
+    expect(result).toEqual({ content: '', unmatchedBlocks: 1 });
+  });
+
   it('reports edits that were overwritten and cannot be highlighted safely', () => {
     const result = revertPatchWithDiagnostics(`const heading = 'changed by another author';
 const value = 'replaced by another author';
